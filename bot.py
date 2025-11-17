@@ -674,6 +674,22 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Дію скасовано.")
     return ConversationHandler.END
 
+# --- [НОВИЙ БЛОК: ВЕБ-СЕРВЕР ДЛЯ RENDER] ---
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'Bot is alive!')
+
+def start_web_server():
+    port = int(os.environ.get('PORT', 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    log.info(f"Web server started on port {port}")
+    server.serve_forever()
+# -------------------------------------------
+
 if __name__ == "__main__":
     if "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" in TELEGRAM_BOT_TOKEN:
         log.error("Вкажіть TELEGRAM_BOT_TOKEN!")
@@ -702,6 +718,10 @@ if __name__ == "__main__":
         ],
     )
     application.add_handler(conv_handler)
-    
+
+    # Запускаємо веб-сервер у фоновому потоці
+    threading.Thread(target=start_web_server, daemon=True).start()
+
     log.info("Бот запускається...")
-    application.run_polling()
+    # allowed_updates потрібен, щоб бот не ловив зайвого і не конфліктував
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
