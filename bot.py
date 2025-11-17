@@ -25,8 +25,8 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # --- ВАШІ НАЛАШТУВАННЯ ---
-TELEGRAM_BOT_TOKEN = "8517828060:AAFV3qJkRSOa2Ay2jJX9Rs6B_8mds01wlxY"
-GROQ_API_KEY = "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" # <--- ОБОВ'ЯЗКОВО ВСТАВТЕ КЛЮЧ
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") # <--- ОБОВ'ЯЗКОВО ВСТАВТЕ КЛЮЧ
 DEFAULT_CRF = "20" 
 WORDS_PER_LINE = 2 
 MAX_LINES_PER_PAGE = 1 
