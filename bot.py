@@ -308,7 +308,7 @@ def process_video_with_edits(video_path, all_words_original, edited_text, crf, s
     cmd = [
         ff, "-y", "-i", video_path, "-vf", vf_filter,
         "-c:v", "libx264", 
-        "-crf", "28", # Швидкість для Render
+        "-crf", "20", # Швидкість для Render
         "-preset", "ultrafast", 
         "-c:a", "copy",
         out_path
