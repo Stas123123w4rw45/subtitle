@@ -245,6 +245,23 @@ def _events_from_layout(tokens, token_times, manual_starts):
         fixed_events.append((t0, t1, txt))
     return fixed_events
 
+def generate_word_events(tokens, token_times):
+    """Create ASS events for each word with highlight style.
+    Returns list of (start, end, text) where text includes override tag for WordHighlight.
+    """
+    events = []
+    for i, token in enumerate(tokens):
+        if i >= len(token_times):
+            break
+        start, end = token_times[i]
+        clean = re.sub(r"[^a-zA-Zа-яА-Я0-9іїєґІЇЄҐ']+", "", token)
+        if not clean:
+            continue
+        # Use ASS override \rWordHighlight to apply the highlight style
+        text = f"{{\\rWordHighlight}}{clean.upper()}"
+        events.append((start, end, text))
+    return events
+
 def write_ass_styled(out_path, events, style_settings):
     log.info(f"Генерація стилізованого ASS файлу...")
     
@@ -265,18 +282,28 @@ def write_ass_styled(out_path, events, style_settings):
         "2,1,5,"
         "10,10,10,0"
     )
+    # New style for per‑word highlight with rounded background approximation
+    style_highlight = (
+        f"Style: WordHighlight,{fontname},{fontsize},"
+        f"{fontcolor},&H00FFFFFF,&H00000000,&H64000000,"
+        "1,0,0,0,100,100,0,0,1,"
+        "2,1,5,"
+        "10,10,10,0"
+    )
 
     ass = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {target_w}", f"PlayResY: {target_h}",
            "ScaledBorderAndShadow: yes\n", "[V4+ Styles]",
            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
            "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, "
            "Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-           style_string + "\n", "[Events]",
+           style_string + "\n" + style_highlight + "\n", "[Events]",
            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     if not events:
-        ass.append(f"Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0000,0000,0000,,{{\pos({x_pos},{y_pos})}}ПОМИЛКА: НЕ ЗНАЙДЕНО ТЕКСТУ")
+        ass.append(f"Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0000,0000,0000,,{{\\pos({x_pos},{y_pos})}}ПОМИЛКА: НЕ ЗНАЙДЕНО ТЕКСТУ")
     for (t0, t1, text) in events:
-        ass_line = f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},Default,,0000,0000,0000,,{{\pos({x_pos},{y_pos})}}{text}"
+        # Determine style based on presence of highlight override
+        style_name = "WordHighlight" if "{\\rWordHighlight}" in text else "Default"
+        ass_line = f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},{style_name},,0000,0000,0000,,{{\\pos({x_pos},{y_pos})}}{text}"
         ass.append(ass_line)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(ass))
@@ -285,7 +312,8 @@ def process_video_with_edits(video_path, all_words_original, edited_text, crf, s
     tokens, manual_starts = _parse_transcript_for_tokens(edited_text) 
     tokens_for_align = [re.sub(r"[^\w\s']+", "", t) for t in tokens]
     token_times = _align_tokens(all_words_original, tokens_for_align)
-    events = _events_from_layout(tokens, token_times, manual_starts) 
+    # Generate per‑word events with highlight style
+    events = generate_word_events(tokens, token_times)
     
     tmp_dir = tempfile.mkdtemp(prefix="sub_bot_")
     ass_path = os.path.join(tmp_dir, "subs.ass")
