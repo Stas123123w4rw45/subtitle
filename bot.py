@@ -657,6 +657,23 @@ def start_web_server():
     log.info(f"Web server started on port {port}")
     server.serve_forever()
 
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Скасовує поточну операцію та чистить файли."""
+    video_path = context.user_data.get('video_path')
+    tmp_dir = context.user_data.get('tmp_dir')
+    
+    if video_path and os.path.exists(video_path):
+        try: os.remove(video_path)
+        except: pass
+        
+    if tmp_dir and os.path.exists(tmp_dir):
+        try: shutil.rmtree(tmp_dir)
+        except: pass
+        
+    context.user_data.clear()
+    await update.message.reply_text("Дію скасовано. ✅")
+    return ConversationHandler.END
+
 if __name__ == "__main__":
     if "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" in TELEGRAM_BOT_TOKEN:
         log.error("Вкажіть TELEGRAM_BOT_TOKEN!")
