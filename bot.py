@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 # --- ВАШІ НАЛАШТУВАННЯ ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-DEFAULT_CRF = "28" 
+DEFAULT_CRF = "20" 
 WORDS_PER_LINE = 2 
 MAX_LINES_PER_PAGE = 1 
 # -------------------------
