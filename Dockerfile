@@ -13,4 +13,5 @@ COPY . /app
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Запускаємо бота
-CMD ["python", "bot.py"]
+RUN chmod +x start.sh
+CMD ["./start.sh"]

@@ -9,7 +9,35 @@ import shutil
 import logging
 import asyncio
 import re
+import json
 from groq import Groq 
+
+SETTINGS_FILE = "user_settings.json"
+
+def load_settings(chat_id):
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get(str(chat_id), {})
+    except Exception as e:
+        log.error(f"Error loading settings: {e}")
+    return {}
+
+def save_settings(chat_id, settings):
+    try:
+        data = {}
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                try: data = json.load(f)
+                except: pass
+        
+        data[str(chat_id)] = settings
+        
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        log.error(f"Error saving settings: {e}") 
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -411,11 +439,14 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['all_words'] = all_words
         context.user_data['clean_text'] = clean_text 
         
-        context.user_data['style_fontsize'] = 93
-        context.user_data['style_color_name'] = 'Білий'
-        context.user_data['style_color_value'] = '&H00FFFFFF'
-        context.user_data['style_font_name'] = STYLE_FONTS[0]
-        context.user_data['style_margin_bottom'] = 30 # За замовчуванням 30%
+        # Load saved settings
+        saved_settings = load_settings(message.chat_id)
+        
+        context.user_data['style_fontsize'] = saved_settings.get('fontsize', 93)
+        context.user_data['style_color_name'] = saved_settings.get('color_name', 'Білий')
+        context.user_data['style_color_value'] = saved_settings.get('color_value', '&H00FFFFFF')
+        context.user_data['style_font_name'] = saved_settings.get('font_name', STYLE_FONTS[0])
+        context.user_data['style_margin_bottom'] = saved_settings.get('margin_bottom', 30)
 
         # [!!! РОЗБИТТЯ ДОВГОГО ТЕКСТУ !!!]
         await message.reply_text(
@@ -665,6 +696,16 @@ async def handle_style_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         if data == 'style_margin_next': idx = (idx + 1) % len(MARGIN_OPTIONS)
         else: idx = (idx - 1) % len(MARGIN_OPTIONS)
         user_data['style_margin_bottom'] = MARGIN_OPTIONS[idx]
+
+    # Save settings
+    current_settings = {
+        'fontsize': user_data.get('style_fontsize'),
+        'color_name': user_data.get('style_color_name'),
+        'color_value': user_data.get('style_color_value'),
+        'font_name': user_data.get('style_font_name'),
+        'margin_bottom': user_data.get('style_margin_bottom')
+    }
+    save_settings(query.message.chat_id, current_settings)
 
     text, keyboard = _get_style_menu(user_data)
     try:
