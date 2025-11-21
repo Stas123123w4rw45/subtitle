@@ -451,7 +451,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # [!!! РОЗБИТТЯ ДОВГОГО ТЕКСТУ !!!]
         await message.reply_text(
             f"Ось розпізнаний текст (без пунктуації).\n\n"
-            f"👉 Надішліть виправлений текст або 'ОК'.\n\n"
+            f"👉 Надішліть виправлений текст (подвійний пробіл - новий рядок) або 'ОК'.\n\n"
             f"Текст для копіювання нижче 👇",
             parse_mode='Markdown'
         )
