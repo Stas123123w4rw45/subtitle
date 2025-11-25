@@ -1062,21 +1062,28 @@ async def wait_for_network():
     """Waits for Telegram API to be reachable."""
     url = "https://api.telegram.org"
     retries = 0
-    max_retries = 10
+    max_retries = 30  # Wait up to 2.5 minutes
     
     log.info("Checking network connectivity...")
     import httpx
+    import socket
     
     while retries < max_retries:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            # Try DNS resolution first
+            try:
+                socket.gethostbyname("api.telegram.org")
+            except socket.gaierror:
+                log.warning(f"DNS lookup failed ({retries+1}/{max_retries})")
+                
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.get(url)
                 log.info("Network is UP! 🚀")
                 return
         except Exception as e:
             retries += 1
             log.warning(f"Network check failed ({retries}/{max_retries}): {e}")
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)  # Wait 5 seconds between tries
             
     log.error("Network check failed after max retries. Proceeding anyway...")
 
