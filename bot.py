@@ -273,28 +273,107 @@ def _events_from_layout(tokens, token_times, manual_starts):
         fixed_events.append((t0, t1, txt))
     return fixed_events
 
-def generate_word_events(tokens, token_times):
-    """Create ASS events for each word with highlight style.
-    Returns list of (start, end, text) where text includes override tag for WordHighlight.
+def generate_styled_events(tokens, token_times, style_settings):
     """
+    Generates ASS events based on layout settings (WPL, Max Lines) and applies
+    effects (Karaoke, Animation) if enabled.
+    """
+    wpl = style_settings.get('wpl', WORDS_PER_LINE)
+    max_lines = style_settings.get('max_lines', MAX_LINES_PER_PAGE)
+    karaoke = style_settings.get('karaoke', False)
+    animation = style_settings.get('animation', False)
+    # highlight_color is applied via \c tag. Default is taken from settings or hardcoded if missing.
+    highlight_color = style_settings.get('highlight_color', '&H0000FFFF') # Yellow default for karaoke
+
+    n = len(tokens)
+    if n == 0 or not token_times: return []
+
+    # 1. Calculate Layout (Pages/Lines)
+    # We use a simplified manual_starts logic (assuming none for now or passed if needed)
+    manual_starts = set() 
+    pages = _pages_from_manual_or_auto(n, manual_starts, wpl, max_lines)
+
     events = []
-    for i, token in enumerate(tokens):
-        if i >= len(token_times):
-            break
-        start, end = token_times[i]
-        clean = re.sub(r"[^a-zA-Zа-яА-Я0-9іїєґІЇЄҐ']+", "", token)
-        if not clean:
-            continue
-        # Use ASS override \rWordHighlight to apply the highlight style
-        text = f"{{\\rWordHighlight}}{clean.upper()}"
-        events.append((start, end, text))
+    
+    for page_lines in pages:
+        if not page_lines: continue
+        
+        # Flatten lines to get start/end indices for the whole page/event
+        all_indices = [idx for line in page_lines for idx in line]
+        if not all_indices: continue
+        
+        start_idx = all_indices[0]
+        end_idx = all_indices[-1]
+        
+        if start_idx >= len(token_times) or end_idx >= len(token_times): continue
+
+        t_start = token_times[start_idx][0]
+        t_end = token_times[end_idx][1]
+        
+        # Pad time slightly
+        t_start = max(0, t_start - 0.1)
+        t_end = t_end + 0.1
+        duration_ms = (t_end - t_start) * 1000
+
+        # Build Text
+        lines_text = []
+        for line_indices in page_lines:
+            line_parts = []
+            for idx in line_indices:
+                if idx >= len(tokens): continue
+                
+                token = tokens[idx]
+                clean_token = re.sub(r"[^a-zA-Zа-яА-Я0-9іїєґІЇЄҐ']+", "", token)
+                if not clean_token: continue
+                
+                # Word Timing
+                w_start = token_times[idx][0]
+                w_end = token_times[idx][1]
+                
+                # Relative times in ms for tags
+                rel_start = int((w_start - t_start) * 1000)
+                rel_end = int((w_end - t_start) * 1000)
+                
+                prefix = ""
+                suffix = ""
+                
+                # Apply Effects
+                if karaoke:
+                    # \t(t1,t2,tags) - animate color change
+                    # We want it to be Highlighted during [rel_start, rel_end]
+                    # And Normal before/after.
+                    # Since \t is cumulative, it's tricky. 
+                    # Simpler approach: \1c&H...& for highlight, then revert.
+                    # But \t is better for smooth or precise timing.
+                    # Let's use a simple hard switch:
+                    # {\t(start,start,\1c&HHighlight&)}{\t(end,end,\1c&HNormal&)}
+                    
+                    # Note: ASS colors are BGR. 
+                    normal_color = style_settings.get('fontcolor', '&H00FFFFFF')
+                    
+                    prefix += f"{{\\t({rel_start},{rel_start},\\1c{highlight_color})}}{{\\t({rel_end},{rel_end},\\1c{normal_color})}}"
+
+                if animation:
+                    # Pop up effect: Scale up to 120% then back to 100%
+                    # {\t(start, mid, \fscx120\fscy120)}{\t(mid, end, \fscx100\fscy100)}
+                    mid = (rel_start + rel_end) // 2
+                    prefix += f"{{\\t({rel_start},{mid},\\fscx120\\fscy120)}}{{\\t({mid},{rel_end},\\fscx100\\fscy100)}}"
+
+                line_parts.append(f"{prefix}{clean_token.upper()}{suffix}")
+            
+            if line_parts:
+                lines_text.append(" ".join(line_parts))
+        
+        if lines_text:
+            full_text = r"\N".join(lines_text)
+            events.append((t_start, t_end, full_text))
+
     return events
 
 def write_ass_styled(out_path, events, style_settings):
     log.info(f"Генерація стилізованого ASS файлу...")
     
-    # [!!! НОВЕ: ВІДСТУП !!!]
-    y_offset_percent = style_settings.get('margin_bottom', 30) # За замовчуванням 30%
+    y_offset_percent = style_settings.get('margin_bottom', 30)
     target_w = 1080; target_h = 1920
     y_pos = int(target_h - (target_h * (y_offset_percent / 100.0)))
     x_pos = target_w // 2
@@ -303,19 +382,16 @@ def write_ass_styled(out_path, events, style_settings):
     fontcolor = style_settings.get('fontcolor', '&H00FFFFFF')
     fontname = style_settings.get('fontname', 'Peace Sans')
     
+    # Shadow and Outline settings
+    shadow_size = 0 if not style_settings.get('shadow_enabled', True) else 4
+    outline_size = 0 if not style_settings.get('outline_enabled', True) else 3
+    
+    # Main Style
     style_string = (
         f"Style: Default,{fontname},{fontsize},"
         f"{fontcolor},&H00FFFFFF,&H00000000,&H64000000,"
-        "1,0,0,0,100,100,0,0,1,"
-        "2,1,5,"
-        "10,10,10,0"
-    )
-    # New style for per‑word highlight with rounded background approximation
-    style_highlight = (
-        f"Style: WordHighlight,{fontname},{fontsize},"
-        f"{fontcolor},&H00FFFFFF,&H00000000,&H64000000,"
-        "1,0,0,0,100,100,0,0,1,"
-        "2,1,5,"
+        f"1,0,0,0,100,100,0,0,1,"
+        f"{outline_size},{shadow_size},5," # Outline, Shadow, Alignment (5=Center)
         "10,10,10,0"
     )
 
@@ -324,15 +400,16 @@ def write_ass_styled(out_path, events, style_settings):
            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
            "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, "
            "Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-           style_string + "\n" + style_highlight + "\n", "[Events]",
+           style_string + "\n", "[Events]",
            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
+           
     if not events:
         ass.append(f"Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0000,0000,0000,,{{\\pos({x_pos},{y_pos})}}ПОМИЛКА: НЕ ЗНАЙДЕНО ТЕКСТУ")
+    
     for (t0, t1, text) in events:
-        # Determine style based on presence of highlight override
-        style_name = "WordHighlight" if "{\\rWordHighlight}" in text else "Default"
-        ass_line = f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},{style_name},,0000,0000,0000,,{{\\pos({x_pos},{y_pos})}}{text}"
+        ass_line = f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},Default,,0000,0000,0000,,{{\\pos({x_pos},{y_pos})}}{text}"
         ass.append(ass_line)
+        
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(ass))
 
@@ -340,8 +417,8 @@ def process_video_with_edits(video_path, all_words_original, edited_text, crf, s
     tokens, manual_starts = _parse_transcript_for_tokens(edited_text) 
     tokens_for_align = [re.sub(r"[^\w\s']+", "", t) for t in tokens]
     token_times = _align_tokens(all_words_original, tokens_for_align)
-    # Generate per‑word events with highlight style
-    events = generate_word_events(tokens, token_times)
+    # Generate events using new logic
+    events = generate_styled_events(tokens, token_times, style_settings)
     
     tmp_dir = tempfile.mkdtemp(prefix="sub_bot_")
     ass_path = os.path.join(tmp_dir, "subs.ass")
@@ -447,6 +524,12 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['style_color_value'] = saved_settings.get('color_value', '&H00FFFFFF')
         context.user_data['style_font_name'] = saved_settings.get('font_name', STYLE_FONTS[0])
         context.user_data['style_margin_bottom'] = saved_settings.get('margin_bottom', 30)
+        context.user_data['style_shadow_enabled'] = saved_settings.get('shadow_enabled', True)
+        context.user_data['style_outline_enabled'] = saved_settings.get('outline_enabled', True)
+        context.user_data['style_wpl'] = saved_settings.get('wpl', WORDS_PER_LINE)
+        context.user_data['style_max_lines'] = saved_settings.get('max_lines', MAX_LINES_PER_PAGE)
+        context.user_data['style_animation'] = saved_settings.get('animation', False)
+        context.user_data['style_karaoke'] = saved_settings.get('karaoke', False)
 
         # [!!! РОЗБИТТЯ ДОВГОГО ТЕКСТУ !!!]
         await message.reply_text(
@@ -462,7 +545,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await message.reply_text(f"{clean_text}")
         
-        text_menu, keyboard = _get_style_menu(context.user_data)
+        text_menu, keyboard = _get_settings_menu(context.user_data, 'main')
         await message.reply_text(text_menu, reply_markup=keyboard, parse_mode='Markdown')
 
         return STATE_RECEIVE_EDIT
@@ -511,29 +594,56 @@ async def handle_audio_transcription(update: Update, context: ContextTypes.DEFAU
 
 async def handle_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_reply = update.message.text
+    clean_text = context.user_data.get('clean_text')
+
+    if user_reply.lower() in ['окей', 'ок', 'ok']:
+        text_to_process = clean_text
+    else:
+        text_to_process = user_reply
+        
+    context.user_data['text_to_process'] = text_to_process
+    
+    # Show menu again with updated text confirmation
+    await update.message.reply_text("Текст прийнято! Налаштуйте стиль і натисніть 'Готово'. 👇")
+    text_menu, keyboard = _get_settings_menu(context.user_data, 'main')
+    await update.message.reply_text(text_menu, reply_markup=keyboard, parse_mode='Markdown')
+    return STATE_RECEIVE_EDIT
+
+async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Executed when user clicks 'Done'.
+    """
     video_path = context.user_data.get('video_path')
     all_words = context.user_data.get('all_words')
-    clean_text = context.user_data.get('clean_text')
+    text_to_process = context.user_data.get('text_to_process', context.user_data.get('clean_text'))
+    
     tmp_dir = None 
     keep_files_flag = False
+    
+    # Determine chat_id/message_id for reply
+    if update.message:
+        chat_id = update.message.chat_id
+        reply_to = update.message.message_id
+    else:
+        chat_id = update.effective_chat.id
+        reply_to = None # Callback query doesn't have a message ID to reply to in the same way
 
     try:
-        if not video_path or not all_words or not clean_text:
-            await update.message.reply_text("Помилка стану. Будь ласка, надішліть відео знову.")
-            return ConversationHandler.END
-
-        if user_reply.lower() in ['окей', 'ок', 'ok']:
-            text_to_process = clean_text
-            await update.message.reply_text("Прийнято! Оброблюю... (Крок 2/3) ⚙️")
-        else:
-            text_to_process = user_reply
-            await update.message.reply_text("Прийнято! Оброблюю ваш текст... (Крок 2/3) ⚙️")
+        if not video_path or not all_words:
+            await context.bot.send_message(chat_id, "Помилка стану. Надішліть відео знову.")
+            return
 
         style_settings = {
             'fontsize': context.user_data.get('style_fontsize', 93),
             'fontcolor': context.user_data.get('style_color_value', '&H00FFFFFF'),
             'fontname': context.user_data.get('style_font_name', STYLE_FONTS[0]),
-            'margin_bottom': context.user_data.get('style_margin_bottom', 30)
+            'margin_bottom': context.user_data.get('style_margin_bottom', 30),
+            'shadow_enabled': context.user_data.get('style_shadow_enabled', True),
+            'outline_enabled': context.user_data.get('style_outline_enabled', True),
+            'wpl': context.user_data.get('style_wpl', 2),
+            'max_lines': context.user_data.get('style_max_lines', 1),
+            'animation': context.user_data.get('style_animation', False),
+            'karaoke': context.user_data.get('style_karaoke', False)
         }
 
         # Запускаємо обробку в окремому потоці
@@ -554,31 +664,27 @@ async def handle_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if processed_file_size_mb > 49.0:
             log.warning(f"Файл занадто великий: {processed_file_size_mb:.2f} MB")
-            await update.message.reply_text(
-                f"✅ **Готово!**\n\n"
-                f"Файл ({processed_file_size_mb:.2f} МБ) завеликий для Telegram.\n"
-                f"Якщо ви на сервері - ви його не зможете забрати. Якщо локально - він тут:\n"
-                f"`{processed_path}`",
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ **Готово!**\n\nФайл ({processed_file_size_mb:.2f} МБ) завеликий для Telegram.\n`{processed_path}`",
                 parse_mode='Markdown'
             )
             keep_files_flag = True
         else:
-            # [!!! ПОВІДОМЛЕННЯ ПРО ЧАС !!!]
-            await update.message.reply_text("Готово! Надсилаю відео... (Це може зайняти декілька хвилин) ⏳🚀")
+            await context.bot.send_message(chat_id, "Готово! Надсилаю відео... ⏳🚀")
             await context.bot.send_video(
-                chat_id=update.message.chat_id,
+                chat_id=chat_id,
                 video=open(processed_path, 'rb'),
                 filename=os.path.basename(processed_path),
-                reply_to_message_id=update.message.message_id,
                 read_timeout=120, 
                 write_timeout=120, 
                 connect_timeout=120
             )
-            log.info(f"Відео надіслано: {update.message.chat_id}")
+            log.info(f"Відео надіслано: {chat_id}")
 
     except Exception as e:
-        log.error(f"Помилка (handle_edit): {e}", exc_info=True)
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Помилка: {e}")
+        log.error(f"Помилка (run_processing): {e}", exc_info=True)
+        await context.bot.send_message(chat_id=chat_id, text=f"Помилка: {e}")
     
     finally:
         video_path = context.user_data.get('video_path')
@@ -591,7 +697,6 @@ async def handle_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 shutil.rmtree(tmp_dir)
             
         context.user_data.clear()
-        return ConversationHandler.END
 
 # --- Стилі та Меню ---
 
@@ -613,89 +718,187 @@ STYLE_FONTS = [
 
 MARGIN_OPTIONS = [10, 15, 20, 25, 30, 40]
 
-def _get_style_menu(user_data):
-    size = user_data.get('style_fontsize', 93)
+# --- UI & MENUS ---
+
+def _get_settings_menu(user_data, menu_state='main'):
+    """
+    Generates text and keyboard for different menu states:
+    'main', 'style', 'layout', 'effects'
+    """
+    # Load current values
+    fontsize = user_data.get('style_fontsize', 93)
     color_name = user_data.get('style_color_name', 'Білий')
     font_name = user_data.get('style_font_name', 'Peace Sans')
     margin = user_data.get('style_margin_bottom', 30)
     
-    text = (
-        f"🎨 **Налаштування стилю**\n\n"
-        f"Шрифт: `{font_name}`\n"
-        f"Розмір: `{size}`\n"
-        f"Колір: `{color_name}`\n"
-        f"Відступ знизу: `{margin}%`\n\n"
-        f"_(Налаштування застосуються після відправки тексту)_"
-    )
+    shadow = "✅" if user_data.get('style_shadow_enabled', True) else "❌"
+    outline = "✅" if user_data.get('style_outline_enabled', True) else "❌"
     
-    keyboard_size = [
-        InlineKeyboardButton("Розмір -", callback_data='style_size_minus'),
-        InlineKeyboardButton("Розмір +", callback_data='style_size_plus'),
-    ]
-    keyboard_color = [
-        InlineKeyboardButton("‹ Колір", callback_data='style_color_prev'),
-        InlineKeyboardButton("Колір ›", callback_data='style_color_next'),
-    ]
-    keyboard_font = [
-        InlineKeyboardButton("‹ Шрифт", callback_data='style_font_prev'),
-        InlineKeyboardButton("Шрифт ›", callback_data='style_font_next'),
-    ]
-    # [!!! НОВЕ: Кнопки для відступу !!!]
-    keyboard_margin = [
-        InlineKeyboardButton("‹ Відступ", callback_data='style_margin_prev'),
-        InlineKeyboardButton("Відступ ›", callback_data='style_margin_next'),
-    ]
+    wpl = user_data.get('style_wpl', WORDS_PER_LINE)
+    max_lines = user_data.get('style_max_lines', MAX_LINES_PER_PAGE)
     
-    # [!!! НОВЕ: Кнопка скасування !!!]
-    keyboard_cancel = [
-        InlineKeyboardButton("❌ Завантажити нове відео", callback_data='new_video')
-    ]
+    anim = "✅" if user_data.get('style_animation', False) else "❌"
+    karaoke = "✅" if user_data.get('style_karaoke', False) else "❌"
     
-    return text, InlineKeyboardMarkup([keyboard_size, keyboard_color, keyboard_font, keyboard_margin, keyboard_cancel])
+    text = ""
+    keyboard = []
 
-async def handle_style_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if menu_state == 'main':
+        text = (
+            f"⚙️ **Налаштування субтитрів**\n\n"
+            f"🎨 Стиль: {font_name}, {fontsize}, {color_name}\n"
+            f"📐 Макет: {wpl} слів/ряд, {max_lines} ряд/стор\n"
+            f"✨ Ефекти: Анім {anim}, Караоке {karaoke}\n"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🎨 Стиль", callback_data='menu_style'),
+             InlineKeyboardButton("📐 Макет", callback_data='menu_layout')],
+            [InlineKeyboardButton("✨ Ефекти", callback_data='menu_effects')],
+            [InlineKeyboardButton("✅ Готово (Обробити)", callback_data='process_done')],
+            [InlineKeyboardButton("❌ Скасувати", callback_data='new_video')]
+        ]
+
+    elif menu_state == 'style':
+        text = (
+            f"🎨 **Стиль**\n\n"
+            f"Шрифт: {font_name}\n"
+            f"Розмір: {fontsize}\n"
+            f"Колір: {color_name}\n"
+            f"Тінь: {shadow} | Обводка: {outline}"
+        )
+        keyboard = [
+            [InlineKeyboardButton("Шрифт ›", callback_data='set_font_next')],
+            [InlineKeyboardButton("- Розмір", callback_data='set_size_minus'),
+             InlineKeyboardButton("+ Розмір", callback_data='set_size_plus')],
+            [InlineKeyboardButton("‹ Колір", callback_data='set_color_prev'),
+             InlineKeyboardButton("Колір ›", callback_data='set_color_next')],
+            [InlineKeyboardButton(f"Тінь {shadow}", callback_data='toggle_shadow'),
+             InlineKeyboardButton(f"Обводка {outline}", callback_data='toggle_outline')],
+            [InlineKeyboardButton("🔙 Назад", callback_data='menu_main')]
+        ]
+
+    elif menu_state == 'layout':
+        text = (
+            f"📐 **Макет**\n\n"
+            f"Слів у рядку: {wpl}\n"
+            f"Рядків на сторінці: {max_lines}\n"
+            f"Відступ знизу: {margin}%"
+        )
+        keyboard = [
+            [InlineKeyboardButton("- Слова", callback_data='set_wpl_minus'),
+             InlineKeyboardButton("+ Слова", callback_data='set_wpl_plus')],
+            [InlineKeyboardButton("- Рядки", callback_data='set_lines_minus'),
+             InlineKeyboardButton("+ Рядки", callback_data='set_lines_plus')],
+            [InlineKeyboardButton("- Відступ", callback_data='set_margin_minus'),
+             InlineKeyboardButton("+ Відступ", callback_data='set_margin_plus')],
+            [InlineKeyboardButton("🔙 Назад", callback_data='menu_main')]
+        ]
+
+    elif menu_state == 'effects':
+        text = (
+            f"✨ **Ефекти**\n\n"
+            f"Pop-up Анімація: {anim}\n"
+            f"Караоке (підсвітка): {karaoke}\n"
+            f"_(Караоке змінює колір активного слова)_"
+        )
+        keyboard = [
+            [InlineKeyboardButton(f"Анімація {anim}", callback_data='toggle_anim')],
+            [InlineKeyboardButton(f"Караоке {karaoke}", callback_data='toggle_karaoke')],
+            [InlineKeyboardButton("🔙 Назад", callback_data='menu_main')]
+        ]
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
     user_data = context.user_data
     
-    # [!!! Обробка кнопки "Нове відео" !!!]
+    # Navigation
+    if data.startswith('menu_'):
+        target = data.split('_')[1]
+        text, markup = _get_settings_menu(user_data, target)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode='Markdown')
+        return
+
+    # Actions
+    if data == 'process_done':
+        # Trigger processing (simulate sending "OK")
+        # We can't easily trigger the message handler, so we call the logic directly or ask user to confirm.
+        # Better: Just say "Settings saved. Send 'OK' to process." or edit text to say "Processing..."
+        # Actually, the user flow is: Send Video -> Send Text -> Menu -> (User clicks Done) -> Processing.
+        # So we need to call the processing logic here.
+        await query.edit_message_text("Налаштування збережено! Починаю обробку... ⚙️")
+        
+        # We need to trigger handle_edit logic. 
+        # Since handle_edit expects a Message update, we can't call it directly with CallbackQuery.
+        # We will extract the logic to a helper or just run it here.
+        # Let's call a helper function `run_processing(update, context)`
+        await run_processing(update, context)
+        return ConversationHandler.END
+
     if data == 'new_video':
-        await query.edit_message_text("Дію скасовано. Надішліть нове відео або аудіо. 📤")
+        await query.edit_message_text("Дію скасовано. Надішліть нове відео. 📤")
         context.user_data.clear()
         return ConversationHandler.END
-    
-    if data == 'style_size_plus':
+
+    # Style Setters
+    if data == 'set_size_plus':
         user_data['style_fontsize'] = user_data.get('style_fontsize', 93) + 5
-    elif data == 'style_size_minus':
+    elif data == 'set_size_minus':
         user_data['style_fontsize'] = max(10, user_data.get('style_fontsize', 93) - 5)
-        
-    elif data in ['style_color_prev', 'style_color_next']:
+    
+    elif data == 'set_font_next':
+        curr = user_data.get('style_font_name', STYLE_FONTS[0])
+        try: idx = STYLE_FONTS.index(curr)
+        except: idx = 0
+        idx = (idx + 1) % len(STYLE_FONTS)
+        user_data['style_font_name'] = STYLE_FONTS[idx]
+
+    elif data == 'set_color_next':
         curr = user_data.get('style_color_name', 'Білий')
         try: idx = COLOR_NAMES.index(curr)
         except: idx = 0
-        if data == 'style_color_next': idx = (idx + 1) % len(COLOR_NAMES)
-        else: idx = (idx - 1) % len(COLOR_NAMES)
+        idx = (idx + 1) % len(COLOR_NAMES)
+        new_name = COLOR_NAMES[idx]
+        user_data['style_color_name'] = new_name
+        user_data['style_color_value'] = STYLE_COLORS[new_name]
+    elif data == 'set_color_prev':
+        curr = user_data.get('style_color_name', 'Білий')
+        try: idx = COLOR_NAMES.index(curr)
+        except: idx = 0
+        idx = (idx - 1) % len(COLOR_NAMES)
         new_name = COLOR_NAMES[idx]
         user_data['style_color_name'] = new_name
         user_data['style_color_value'] = STYLE_COLORS[new_name]
 
-    elif data in ['style_font_prev', 'style_font_next']:
-        curr = user_data.get('style_font_name', 'Peace Sans')
-        try: idx = STYLE_FONTS.index(curr)
-        except: idx = 0
-        if data == 'style_font_next': idx = (idx + 1) % len(STYLE_FONTS)
-        else: idx = (idx - 1) % len(STYLE_FONTS)
-        user_data['style_font_name'] = STYLE_FONTS[idx]
-        
-    # [!!! Логіка відступу !!!]
-    elif data in ['style_margin_prev', 'style_margin_next']:
-        curr = user_data.get('style_margin_bottom', 30)
-        try: idx = MARGIN_OPTIONS.index(curr)
-        except: idx = 4 # 30%
-        if data == 'style_margin_next': idx = (idx + 1) % len(MARGIN_OPTIONS)
-        else: idx = (idx - 1) % len(MARGIN_OPTIONS)
-        user_data['style_margin_bottom'] = MARGIN_OPTIONS[idx]
+    elif data == 'toggle_shadow':
+        user_data['style_shadow_enabled'] = not user_data.get('style_shadow_enabled', True)
+    elif data == 'toggle_outline':
+        user_data['style_outline_enabled'] = not user_data.get('style_outline_enabled', True)
+
+    # Layout Setters
+    elif data == 'set_wpl_plus':
+        user_data['style_wpl'] = user_data.get('style_wpl', 2) + 1
+    elif data == 'set_wpl_minus':
+        user_data['style_wpl'] = max(1, user_data.get('style_wpl', 2) - 1)
+    
+    elif data == 'set_lines_plus':
+        user_data['style_max_lines'] = user_data.get('style_max_lines', 1) + 1
+    elif data == 'set_lines_minus':
+        user_data['style_max_lines'] = max(1, user_data.get('style_max_lines', 1) - 1)
+
+    elif data == 'set_margin_plus':
+        user_data['style_margin_bottom'] = min(50, user_data.get('style_margin_bottom', 30) + 5)
+    elif data == 'set_margin_minus':
+        user_data['style_margin_bottom'] = max(0, user_data.get('style_margin_bottom', 30) - 5)
+
+    # Effects Setters
+    elif data == 'toggle_anim':
+        user_data['style_animation'] = not user_data.get('style_animation', False)
+    elif data == 'toggle_karaoke':
+        user_data['style_karaoke'] = not user_data.get('style_karaoke', False)
 
     # Save settings
     current_settings = {
@@ -703,13 +906,35 @@ async def handle_style_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         'color_name': user_data.get('style_color_name'),
         'color_value': user_data.get('style_color_value'),
         'font_name': user_data.get('style_font_name'),
-        'margin_bottom': user_data.get('style_margin_bottom')
+        'margin_bottom': user_data.get('style_margin_bottom'),
+        'shadow_enabled': user_data.get('style_shadow_enabled'),
+        'outline_enabled': user_data.get('style_outline_enabled'),
+        'wpl': user_data.get('style_wpl'),
+        'max_lines': user_data.get('style_max_lines'),
+        'animation': user_data.get('style_animation'),
+        'karaoke': user_data.get('style_karaoke')
     }
     save_settings(query.message.chat_id, current_settings)
 
-    text, keyboard = _get_style_menu(user_data)
+    # Refresh current menu
+    # Need to know which menu we are in. 
+    # A simple hack is to check the button that was clicked or store state.
+    # But since we don't store menu state in user_data, we can infer or just default to 'main' 
+    # or try to guess. 
+    # Better: Pass the menu state in callback data? e.g. 'set_size_plus:style'
+    # For now, let's infer based on the command group.
+    
+    next_menu = 'main'
+    if data.startswith('set_size') or data.startswith('set_font') or data.startswith('set_color') or 'shadow' in data or 'outline' in data:
+        next_menu = 'style'
+    elif 'wpl' in data or 'lines' in data or 'margin' in data:
+        next_menu = 'layout'
+    elif 'anim' in data or 'karaoke' in data:
+        next_menu = 'effects'
+        
+    text, markup = _get_settings_menu(user_data, next_menu)
     try:
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode='Markdown')
+        await query.edit_message_text(text, reply_markup=markup, parse_mode='Markdown')
     except Exception:
         pass
 
@@ -751,7 +976,7 @@ if __name__ == "__main__":
             STATE_RECEIVE_EDIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit),
                 # Додаємо обробку new_video сюди
-                CallbackQueryHandler(handle_style_buttons, pattern='^(style_|new_video)')
+                CallbackQueryHandler(handle_settings_callback, pattern='^(menu_|set_|toggle_|process_|new_video)')
             ],
         },
         fallbacks=[
