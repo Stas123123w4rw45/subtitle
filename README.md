@@ -1,4 +1,4 @@
-# Subtitle Bot
+# Subtitle Bot (Hugging Face Edition) 🚀
 
 Telegram bot for generating subtitles with animated word highlights.
 
