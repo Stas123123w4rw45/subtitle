@@ -460,6 +460,69 @@ def process_video_with_edits(video_path, all_words_original, edited_text, crf, s
 
     return out_path, tmp_dir
 
+def get_video_duration(file_path):
+    """Returns video duration in seconds using ffprobe."""
+    try:
+        # Try using ffprobe if available, otherwise estimate or fail
+        # We can use ffmpeg to get duration from stderr
+        ff = find_ffmpeg()
+        cmd = [ff, "-i", file_path]
+        result = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, encoding='utf-8')
+        # Search for "Duration: 00:00:05.00"
+        match = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})", result.stderr)
+        if match:
+            h, m, s = map(float, match.groups())
+            return h * 3600 + m * 60 + s
+    except Exception as e:
+        log.error(f"Error getting duration: {e}")
+    return 0
+
+def compress_video(input_path, target_size_mb=49.0):
+    """Compresses video to target size using bitrate control."""
+    log.info(f"Compressing {input_path} to {target_size_mb}MB...")
+    
+    duration = get_video_duration(input_path)
+    if duration <= 0:
+        log.error("Could not determine duration for compression.")
+        return input_path # Return original if fail
+
+    # Calculate target bitrate
+    # Size = (VideoBitrate + AudioBitrate) * Duration / 8
+    # TargetBits = TargetMB * 8 * 1024 * 1024
+    # TargetBitrate = TargetBits / Duration
+    
+    target_total_bitrate_kbit = (target_size_mb * 8 * 1024) / duration
+    audio_bitrate_kbit = 128
+    video_bitrate_kbit = target_total_bitrate_kbit - audio_bitrate_kbit
+    
+    if video_bitrate_kbit < 100: video_bitrate_kbit = 100 # Minimum floor
+    
+    log.info(f"Duration: {duration}s, Target Bitrate: {video_bitrate_kbit:.0f}k")
+    
+    ff = find_ffmpeg()
+    dir_name = os.path.dirname(input_path)
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+    out_path = os.path.join(dir_name, f"{base_name}_compressed.mp4")
+    
+    # Single pass with bitrate control is usually enough for this purpose
+    # We use -maxrate and -bufsize to constrain it
+    cmd = [
+        ff, "-y", "-i", input_path,
+        "-c:v", "libx264",
+        "-b:v", f"{video_bitrate_kbit}k",
+        "-maxrate", f"{video_bitrate_kbit * 1.5}k",
+        "-bufsize", f"{video_bitrate_kbit * 2}k",
+        "-preset", "veryfast",
+        "-c:a", "aac", "-b:a", "128k",
+        out_path
+    ]
+    
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        return out_path
+    return input_path
+
 # --- Функції Telegram Бота ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -674,13 +737,37 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         processed_file_size_mb = os.path.getsize(processed_path) / (1024 * 1024)
         
         if processed_file_size_mb > 49.0:
-            log.warning(f"Файл занадто великий: {processed_file_size_mb:.2f} MB")
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ **Готово!**\n\nФайл ({processed_file_size_mb:.2f} МБ) завеликий для Telegram.\n`{processed_path}`",
-                parse_mode='Markdown'
+            log.warning(f"Файл занадто великий: {processed_file_size_mb:.2f} MB. Починаю стиснення...")
+            await context.bot.send_message(chat_id, "Файл великий (>50MB). Стискаю, щоб надіслати... 📉")
+            
+            # Run compression
+            compressed_path = await loop.run_in_executor(
+                None, 
+                compress_video, 
+                processed_path, 
+                48.0 # Target slightly less than 49 to be safe
             )
-            keep_files_flag = True
+            
+            # Check new size
+            new_size_mb = os.path.getsize(compressed_path) / (1024 * 1024)
+            if new_size_mb > 49.5:
+                 log.warning(f"Стиснення не допомогло: {new_size_mb:.2f} MB")
+                 await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ **Не вдалося стиснути достатньо.**\nРозмір: {new_size_mb:.2f} МБ.\n`{compressed_path}`",
+                    parse_mode='Markdown'
+                )
+                 keep_files_flag = True
+            else:
+                log.info(f"Стиснуто до {new_size_mb:.2f} MB")
+                await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=open(compressed_path, 'rb'),
+                    filename=os.path.basename(compressed_path),
+                    read_timeout=120, 
+                    write_timeout=120, 
+                    connect_timeout=120
+                )
         else:
             await context.bot.send_message(chat_id, "Готово! Надсилаю відео... ⏳🚀")
             await context.bot.send_video(
