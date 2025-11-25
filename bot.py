@@ -713,18 +713,7 @@ async def handle_style_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception:
         pass
 
-# --- WEB SERVER ---
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b'Bot is alive!')
 
-def start_web_server():
-    port = int(os.environ.get('PORT', 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    log.info(f"Web server started on port {port}")
-    server.serve_forever()
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Скасовує поточну операцію та чистить файли."""
@@ -772,6 +761,21 @@ if __name__ == "__main__":
     )
     application.add_handler(conv_handler)
 
-    threading.Thread(target=start_web_server, daemon=True).start()
-    log.info("Бот запускається...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Check for Render environment
+    RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+    PORT = int(os.getenv("PORT", "8080"))
+
+    if RENDER_EXTERNAL_URL:
+        webhook_url = f"{RENDER_EXTERNAL_URL}/{TELEGRAM_BOT_TOKEN}"
+        log.info(f"Starting in WEBHOOK mode. Port: {PORT}, URL: {RENDER_EXTERNAL_URL}")
+        log.info(f"Setting webhook to: {webhook_url}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=TELEGRAM_BOT_TOKEN,
+            webhook_url=webhook_url,
+            allowed_updates=Update.ALL_TYPES
+        )
+    else:
+        log.info("Starting in POLLING mode...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
