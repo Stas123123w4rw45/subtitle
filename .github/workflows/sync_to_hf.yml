@@ -17,4 +17,4 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: huggingface-cli upload StarBro/subritle . --repo-type space --token $HF_TOKEN --exclude ".git/*" ".github/*"
+        run: python -m huggingface_hub.cli upload StarBro/subritle . --repo-type space --token $HF_TOKEN --exclude ".git/*" ".github/*"
