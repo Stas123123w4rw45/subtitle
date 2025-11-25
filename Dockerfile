@@ -1,17 +1,23 @@
 FROM python:3.10-slim
 
-# Встановлюємо системні залежності (FFmpeg)
-RUN apt-get update && apt-get install -y ffmpeg
+# Install system dependencies (FFmpeg)
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
-# Налаштовуємо робочу папку
+# Set up working directory
 WORKDIR /app
 
-# Копіюємо файли
-COPY . /app
+# Create a non-root user with ID 1000 (standard for HF Spaces)
+RUN useradd -m -u 1000 user
 
-# Встановлюємо бібліотеки Python
+# Copy files
+COPY --chown=user . /app
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Запускаємо бота
+# Switch to non-root user
+USER user
+
+# Run bot
 RUN chmod +x start.sh
 CMD ["./start.sh"]

@@ -1089,7 +1089,7 @@ if __name__ == "__main__":
 
     # Check for Render environment
     RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
-    PORT = int(os.getenv("PORT", "8080"))
+    PORT = int(os.getenv("PORT", "7860"))
 
     if RENDER_EXTERNAL_URL:
         webhook_url = f"{RENDER_EXTERNAL_URL}/{TELEGRAM_BOT_TOKEN}"
