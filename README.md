@@ -1,3 +1,12 @@
+---
+title: Subtitle Bot
+emoji: 🎬
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+---
+
 # Subtitle Bot (Hugging Face Edition) 🚀
 
 Telegram bot for generating subtitles with animated word highlights.
