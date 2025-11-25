@@ -933,7 +933,10 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         # Since handle_edit expects a Message update, we can't call it directly with CallbackQuery.
         # We will extract the logic to a helper or just run it here.
         # Let's call a helper function `run_processing(update, context)`
-        await run_processing(update, context)
+        
+        # [!!! FIX: RUN IN BACKGROUND !!!]
+        # Use create_task to prevent blocking the webhook response
+        asyncio.create_task(run_processing(update, context))
         return ConversationHandler.END
 
     if data == 'new_video':
