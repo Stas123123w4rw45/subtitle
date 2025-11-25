@@ -1058,6 +1058,28 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Дію скасовано. ✅")
     return ConversationHandler.END
 
+async def wait_for_network():
+    """Waits for Telegram API to be reachable."""
+    url = "https://api.telegram.org"
+    retries = 0
+    max_retries = 10
+    
+    log.info("Checking network connectivity...")
+    import httpx
+    
+    while retries < max_retries:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.get(url)
+                log.info("Network is UP! 🚀")
+                return
+        except Exception as e:
+            retries += 1
+            log.warning(f"Network check failed ({retries}/{max_retries}): {e}")
+            await asyncio.sleep(2)
+            
+    log.error("Network check failed after max retries. Proceeding anyway...")
+
 if __name__ == "__main__":
     if "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" in TELEGRAM_BOT_TOKEN:
         log.error("Вкажіть TELEGRAM_BOT_TOKEN!")
