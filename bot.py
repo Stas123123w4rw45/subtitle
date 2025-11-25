@@ -1064,7 +1064,7 @@ if __name__ == "__main__":
         sys.exit(1)
         
     log.info("Створюємо додаток бота...")
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).connect_timeout(30).read_timeout(30).build()
     
     application.add_handler(MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.AUDIO, handle_audio_transcription))
 
