@@ -10,6 +10,7 @@ import logging
 import asyncio
 import re
 import json
+import gc
 from groq import Groq 
 
 SETTINGS_FILE = "user_settings.json"
@@ -439,10 +440,13 @@ def process_video_with_edits(video_path, all_words_original, edited_text, crf, s
         vf_filter = f"subtitles='{sub_escaped}'"
 
     cmd = [
-        ff, "-y", "-i", video_path, "-vf", vf_filter,
+        ff, "-y", "-i", video_path, "-vf", f"scale='min(1080,iw)':-2,{vf_filter}",
         "-c:v", "libx264", 
-        "-crf", "20", # Швидкість для Render
-        "-preset", "ultrafast", 
+        "-crf", "23", # Трохи збільшуємо CRF для меншого навантаження (було 20)
+        "-preset", "superfast", # superfast менше їсть пам'яті ніж ultrafast іноді, або так само
+        "-threads", "2", # ОБМЕЖЕННЯ ПОТОКІВ для економії RAM
+        "-max_muxing_queue_size", "1024",
+        "-movflags", "+faststart",
         "-c:a", "copy",
         out_path
     ]
@@ -648,6 +652,10 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Запускаємо обробку в окремому потоці
         loop = asyncio.get_running_loop()
+        
+        # Force GC before heavy operation
+        gc.collect()
+        
         processed_path, tmp_dir = await loop.run_in_executor(
             None,
             process_video_with_edits, 
@@ -657,6 +665,9 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             DEFAULT_CRF,
             style_settings 
         )
+        
+        # Force GC after heavy operation
+        gc.collect()
         
         context.user_data['tmp_dir'] = tmp_dir
 
