@@ -17,4 +17,5 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: python -m huggingface_hub.cli upload StarBro/subritle . --repo-type space --token $HF_TOKEN --exclude ".git/*" ".github/*"
+        run: |
+          python -c "from huggingface_hub import HfApi; HfApi().upload_folder(repo_id='StarBro/subritle', folder_path='.', repo_type='space', token='${{ secrets.HF_TOKEN }}', ignore_patterns=['.git/*', '.github/*'])"
