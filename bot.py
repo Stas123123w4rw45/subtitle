@@ -68,19 +68,50 @@ STATE_RECEIVE_VIDEO, STATE_RECEIVE_EDIT = range(2)
 # --- Функції-хелпери ---
 
 def find_ffmpeg():
-    # Спрощена логіка: спочатку шукаємо в PATH, потім локально
+    # 1. Check local folder (priority for portable setup)
+    local_ffmpeg = os.path.join(os.getcwd(), "ffmpeg")
+    if os.path.isfile(local_ffmpeg) and os.access(local_ffmpeg, os.X_OK):
+        log.info(f"Using local ffmpeg: {local_ffmpeg}")
+        return local_ffmpeg
+        
+    # 2. Check PATH
     if shutil.which("ffmpeg"):
+        log.info("Using ffmpeg from PATH")
         return "ffmpeg"
-    local_path = os.path.join(os.getcwd(), "ffmpeg", "bin", "ffmpeg.exe")
-    if os.path.isfile(local_path):
-        return local_path
-    return "ffmpeg"
+        
+    log.error("FFmpeg not found!")
+    return "ffmpeg" # Fallback
 
 def escape_for_subtitles_filter(path):
     p = os.path.abspath(path)
     if os.name == 'nt':
         p = p.replace("\\", "/").replace(":", "\\:")
     return p
+
+def create_rounded_rect_path(w, h, r):
+    """Generates ASS vector path for a rounded rectangle centered at 0,0."""
+    hw = w / 2
+    hh = h / 2
+    r = min(r, hw, hh)
+    
+    # Start top-left (after radius)
+    path = f"m {-hw + r} {-hh} l {hw - r} {-hh} "
+    # Top-right corner
+    path += f"b {hw} {-hh} {hw} {-hh} {hw} {-hh + r} "
+    # Right edge
+    path += f"l {hw} {hh - r} "
+    # Bottom-right corner
+    path += f"b {hw} {hh} {hw} {hh} {hw - r} {hh} "
+    # Bottom edge
+    path += f"l {-hw + r} {hh} "
+    # Bottom-left corner
+    path += f"b {-hw} {hh} {-hw} {hh} {-hw} {hh - r} "
+    # Left edge
+    path += f"l {-hw} {-hh + r} "
+    # Top-left corner
+    path += f"b {-hw} {-hh} {-hw} {-hh} {-hw + r} {-hh} "
+    
+    return path
 
 def ass_time(sec: float) -> str:
     h = int(sec // 3600); m = int((sec % 3600) // 60); s = int(sec % 60); cs = int(round((sec - int(sec))*100))
@@ -198,32 +229,68 @@ def _align_tokens(src_word_segments, tgt_tokens):
             else: token_times.append((0.0, 0.1))
     return token_times
 
-def _pages_from_manual_or_auto(total_tokens, manual_starts, wpl=2, max_lines=1):
-    if total_tokens <= 0: return []
-    starts = sorted({s for s in manual_starts if 0 < s < total_tokens})
-    lines = []
-    if starts:
-        all_starts = [0] + starts
-        for si, s in enumerate(all_starts):
-            seg_start = s
-            seg_end = all_starts[si+1] if si+1 < len(all_starts) else total_tokens
-            cur = seg_start
-            while cur < seg_end:
-                ln_end = min(cur + max(1, int(wpl)), seg_end)
-                lines.append(list(range(cur, ln_end)))
-                cur = ln_end
-    else:
-        cur = 0
-        while cur < total_tokens:
-            ln_end = min(cur + max(1, int(wpl)), total_tokens)
-            lines.append(list(range(cur, ln_end)))
-            cur = ln_end
-    ml = max(1, int(max_lines))
+def _smart_layout(tokens, wpl=2, max_lines=1, fontsize=93):
+    """
+    Smart layout that respects:
+    1. Punctuation (force page break after . ! ?)
+    2. Max Width (18% margin -> ~700px safe zone)
+    3. WPL (soft limit)
+    4. Max Lines (hard limit)
+    """
+    SAFE_WIDTH = 1080 * 0.64  # 1080 - 18%*2 margins ~= 690px
+    AVG_CHAR_WIDTH = fontsize * 0.55 # Heuristic
+    
     pages = []
-    cur = 0
-    while cur < len(lines):
-        pages.append(lines[cur:cur+ml])
-        cur += ml
+    current_page = []
+    current_line = []
+    current_line_width = 0
+    
+    for i, token in enumerate(tokens):
+        # Clean token for width calc
+        clean_t = re.sub(r"[^a-zA-Zа-яА-Я0-9іїєґІЇЄҐ']+", "", token)
+        word_width = len(clean_t) * AVG_CHAR_WIDTH
+        
+        # Check if we need to wrap to new line
+        # 1. WPL limit reached
+        # 2. Width limit reached
+        force_new_line = False
+        if len(current_line) >= wpl:
+            force_new_line = True
+        elif current_line_width + word_width > SAFE_WIDTH:
+            force_new_line = True
+            
+        if force_new_line:
+            if current_line:
+                current_page.append(current_line)
+            current_line = []
+            current_line_width = 0
+            
+            # Check if page is full
+            if len(current_page) >= max_lines:
+                pages.append(current_page)
+                current_page = []
+        
+        # Add to current line
+        current_line.append(i)
+        current_line_width += word_width + (fontsize * 0.2) # Add space width
+        
+        # Check for sentence ending punctuation
+        # We look at the raw token (it might have punctuation)
+        if token and token[-1] in ".!?,:—-":
+            # Finish line
+            current_page.append(current_line)
+            current_line = []
+            current_line_width = 0
+            # Finish page
+            pages.append(current_page)
+            current_page = []
+            
+    # Flush remaining
+    if current_line:
+        current_page.append(current_line)
+    if current_page:
+        pages.append(current_page)
+        
     return pages
 
 def _events_from_layout(tokens, token_times, manual_starts):
@@ -284,17 +351,25 @@ def generate_styled_events(tokens, token_times, style_settings):
     karaoke = style_settings.get('karaoke', False)
     animation = style_settings.get('animation', False)
     # highlight_color is applied via \c tag. Default is taken from settings or hardcoded if missing.
-    highlight_color = style_settings.get('highlight_color', '&H0000FFFF') # Yellow default for karaoke
+    highlight_color = style_settings.get('highlight_color_value', '&H0000FFFF') # Yellow default for karaoke
+    
+    # Box Settings
+    box_enabled = style_settings.get('box_enabled', False)
+    box_color = str(style_settings.get('box_color_value', '&H00FFFFFF'))
+    box_opacity_hex = str(style_settings.get('box_opacity', '&H00'))
 
     n = len(tokens)
     if n == 0 or not token_times: return []
 
     # 1. Calculate Layout (Pages/Lines)
-    # We use a simplified manual_starts logic (assuming none for now or passed if needed)
-    manual_starts = set() 
-    pages = _pages_from_manual_or_auto(n, manual_starts, wpl, max_lines)
+    # Use smart layout
+    fontsize = style_settings.get('fontsize', 93)
+    pages = _smart_layout(tokens, wpl, max_lines, fontsize)
 
     events = []
+    
+    # For box positioning
+    target_w = 1080
     
     for page_lines in pages:
         if not page_lines: continue
@@ -316,16 +391,47 @@ def generate_styled_events(tokens, token_times, style_settings):
         t_end = t_end + 0.1
         duration_ms = (t_end - t_start) * 1000
 
-        # Build Text
+        # Build Text & Boxes
         lines_text = []
-        for line_indices in page_lines:
+        page_boxes = []
+        
+        # Calculate total width of each line to center it
+        # This is an approximation for box positioning
+        
+        for line_idx, line_indices in enumerate(page_lines):
             line_parts = []
+            
+            # Calculate total line width for centering
+            total_line_width = 0
+            word_widths = []
+            space_width = fontsize * 0.2
+            
             for idx in line_indices:
+                if idx >= len(tokens): 
+                    word_widths.append(0)
+                    continue
+                token = tokens[idx]
+                clean_token = re.sub(r"[^a-zA-Zа-яА-Я0-9іїєґІЇЄҐ']+", "", token)
+                # Heuristic width
+                ww = len(clean_token) * (fontsize * 0.55) # Same heuristic as smart layout
+                word_widths.append(ww)
+                total_line_width += ww + space_width
+            
+            if total_line_width > 0: total_line_width -= space_width
+            
+            # Start X (Centered)
+            current_x = (target_w - total_line_width) / 2
+            
+            prev_box_x = None
+            
+            for i, idx in enumerate(line_indices):
                 if idx >= len(tokens): continue
                 
                 token = tokens[idx]
                 clean_token = re.sub(r"[^a-zA-Zа-яА-Я0-9іїєґІЇЄҐ']+", "", token)
                 if not clean_token: continue
+                
+                word_width = word_widths[i]
                 
                 # Word Timing
                 w_start = token_times[idx][0]
@@ -338,36 +444,66 @@ def generate_styled_events(tokens, token_times, style_settings):
                 prefix = ""
                 suffix = ""
                 
+                # --- BACKGROUND (Box) via Vector Drawing ---
+                if box_enabled:
+                    pad_x = 5
+                    pad_y = 2
+                    
+                    b_w = int(word_width + pad_x * 2)
+                    b_h = int(fontsize + pad_y * 2)
+                    
+                    # Box Center X = current_x + word_width / 2
+                    # [RESTORED] +150px offset from "Morning Version"
+                    box_center_x = int(current_x + word_width / 2 + 150)
+                    
+                    box_data = {
+                        'x': box_center_x,
+                        'w': b_w,
+                        'h': b_h,
+                        'line_idx': line_idx,
+                        'word_idx_in_line': i,
+                        'abs_start': w_start,
+                        'abs_end': w_end,
+                        'opacity': box_opacity_hex,
+                        'color': box_color,
+                        'prev_x': prev_box_x
+                    }
+                    page_boxes.append(box_data)
+                    prev_box_x = box_center_x
+                
                 # Apply Effects
                 if karaoke:
-                    # \t(t1,t2,tags) - animate color change
-                    # We want it to be Highlighted during [rel_start, rel_end]
-                    # And Normal before/after.
-                    # Since \t is cumulative, it's tricky. 
-                    # Simpler approach: \1c&H...& for highlight, then revert.
-                    # But \t is better for smooth or precise timing.
-                    # Let's use a simple hard switch:
-                    # {\t(start,start,\1c&HHighlight&)}{\t(end,end,\1c&HNormal&)}
-                    
-                    # Note: ASS colors are BGR. 
+                    # Karaoke: Start with normal color, highlight during word, return to normal
+                    # Initial state: normal color
                     normal_color = style_settings.get('fontcolor', '&H00FFFFFF')
                     
-                    prefix += f"{{\\t({rel_start},{rel_start},\\1c{highlight_color})}}{{\\t({rel_end},{rel_end},\\1c{normal_color})}}"
+                    # At word start: transition to highlight
+                    # At word end: transition back to normal
+                    prefix += f"{{\\1c{normal_color}}}{{\\t({rel_start},{rel_start},\\1c{highlight_color})}}{{\\t({rel_end},{rel_end},\\1c{normal_color})}}"
 
                 if animation:
-                    # Pop up effect: Scale up to 120% then back to 100%
-                    # {\t(start, mid, \fscx120\fscy120)}{\t(mid, end, \fscx100\fscy100)}
+                    # Animation: Start at 100%, scale up to 105% during word, back to 100%
+                    # Initial state: normal scale
                     mid = (rel_start + rel_end) // 2
-                    prefix += f"{{\\t({rel_start},{mid},\\fscx120\\fscy120)}}{{\\t({mid},{rel_end},\\fscx100\\fscy100)}}"
+                    prefix += f"{{\\fscx100\\fscy100}}{{\\t({rel_start},{mid},\\fscx105\\fscy105)}}{{\\t({mid},{rel_end},\\fscx100\\fscy100)}}"
 
                 line_parts.append(f"{prefix}{clean_token.upper()}{suffix}")
+                
+                current_x += word_width + space_width
             
             if line_parts:
                 lines_text.append(" ".join(line_parts))
         
         if lines_text:
             full_text = r"\N".join(lines_text)
-            events.append((t_start, t_end, full_text))
+            events.append({'start': t_start, 'end': t_end, 'fg': full_text, 'boxes': page_boxes})
+    
+    # [FIX] Prevent event overlaps
+    for i in range(len(events) - 1):
+        if events[i]['end'] > events[i+1]['start']:
+            events[i]['end'] = events[i+1]['start']
+        if events[i]['end'] <= events[i]['start']:
+            events[i]['end'] = events[i]['start'] + 0.1
 
     return events
 
@@ -407,8 +543,70 @@ def write_ass_styled(out_path, events, style_settings):
     if not events:
         ass.append(f"Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0000,0000,0000,,{{\\pos({x_pos},{y_pos})}}ПОМИЛКА: НЕ ЗНАЙДЕНО ТЕКСТУ")
     
-    for (t0, t1, text) in events:
-        ass_line = f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},Default,,0000,0000,0000,,{{\\pos({x_pos},{y_pos})}}{text}"
+    for ev in events:
+        # ev is a dict: {'start', 'end', 'fg', 'boxes': []}
+        t0 = ev['start']
+        t1 = ev['end']
+        text_fg = ev['fg']
+        boxes = ev.get('boxes', [])
+        
+        # Dynamic Vertical Centering based on FG text
+        num_lines = text_fg.count(r"\N") + 1
+        current_y = y_pos
+        
+        # Better centering: shift based on missing lines
+        max_lines_setting = style_settings.get('max_lines', 1)
+        if num_lines < max_lines_setting:
+            # Center vertically by adjusting for missing lines
+            # Each line takes fontsize * 1.2 spacing
+            missing_lines = max_lines_setting - num_lines
+            shift = missing_lines * (fontsize * 1.2) / 2  # Half of missing space
+            current_y = int(y_pos - shift)
+            
+        s_time = ass_time(t0)
+        e_time = ass_time(t1)
+        
+        # Layer 0: Background Boxes
+        for box in boxes:
+            line_idx = box['line_idx']
+            
+            # Calculate Y for this line
+            # Line spacing 1.2
+            line_y = current_y - (num_lines - 1 - line_idx) * (fontsize * 1.2)
+            box_y = int(line_y + fontsize * 0.5)
+            
+            bx = box['x']
+            bw = box['w']
+            bh = box['h']
+            
+            # Use ABSOLUTE timestamps for this box
+            box_start = ass_time(box['abs_start'])
+            box_end = ass_time(box['abs_end'])
+            
+            # Vector Rect (Centered at 0,0)
+            rect = create_rounded_rect_path(bw, bh, 15)
+            
+            # [CRITICAL] Use \c for vector fill color
+            style = f"\\c{box['color']}\\bord0\\shad0\\blur0\\alpha&HFF&"
+            
+            # Animation: Sliding
+            anim = f"{{\\alpha{box['opacity']}}}"
+            duration_ms = int((box['abs_end'] - box['abs_start']) * 1000)
+            
+            # Sliding: Use \move if there's a previous box
+            if box['prev_x'] is not None and box['word_idx_in_line'] > 0:
+                prev_x = box['prev_x']
+                prev_y = box_y
+                slide_duration = min(150, duration_ms // 2)
+                pos = f"\\move({prev_x},{prev_y},{bx},{box_y},0,{slide_duration})"
+            else:
+                pos = f"\\pos({bx},{box_y})"
+            
+            ass_line = f"Dialogue: 0,{box_start},{box_end},Default,,0000,0000,0000,,{{{pos}}}{{\\p1}}{style}{anim}{rect}{{\\p0}}"
+            ass.append(ass_line)
+            
+        # Layer 1: Foreground (Text)
+        ass_line = f"Dialogue: 1,{s_time},{e_time},Default,,0000,0000,0000,,{{\\pos({x_pos},{current_y})}}{text_fg}"
         ass.append(ass_line)
         
     with open(out_path, "w", encoding="utf-8") as f:
@@ -577,7 +775,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("Не вдалося розпізнати текст. 😢")
             return ConversationHandler.END
 
-        clean_text = re.sub(r"[^\w\s']+", "", original_text).lower() 
+        # [FIX] Keep punctuation! User needs it in chat, and layout needs it for sentence breaks
+        clean_text = original_text 
 
         context.user_data['video_path'] = tmp_video_file_name
         context.user_data['all_words'] = all_words
@@ -597,20 +796,22 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['style_max_lines'] = saved_settings.get('max_lines', MAX_LINES_PER_PAGE)
         context.user_data['style_animation'] = saved_settings.get('animation', False)
         context.user_data['style_karaoke'] = saved_settings.get('karaoke', False)
+        context.user_data['style_highlight_color_name'] = saved_settings.get('highlight_color_name', 'Жовтий')
+        context.user_data['style_highlight_color_value'] = saved_settings.get('highlight_color_value', '&H0000FFFF')
 
         # [!!! РОЗБИТТЯ ДОВГОГО ТЕКСТУ !!!]
         await message.reply_text(
-            f"Ось розпізнаний текст (без пунктуації).\n\n"
+            f"Ось розпізнаний текст з пунктуацією.\n\n"
             f"👉 Надішліть виправлений текст (подвійний пробіл - новий рядок) або 'ОК'.\n\n"
-            f"Текст для копіювання нижче 👇",
+            f"📋 Текст для копіювання нижче 👇",
             parse_mode='Markdown'
         )
         
         if len(clean_text) > 4000:
             for i in range(0, len(clean_text), 4000):
-                await message.reply_text(clean_text[i:i+4000])
+                await message.reply_text(f"```\n{clean_text[i:i+4000]}\n```", parse_mode='Markdown')
         else:
-            await message.reply_text(f"{clean_text}")
+            await message.reply_text(f"```\n{clean_text}\n```", parse_mode='Markdown')
         
         text_menu, keyboard = _get_settings_menu(context.user_data, 'main')
         await message.reply_text(text_menu, reply_markup=keyboard, parse_mode='Markdown')
@@ -710,7 +911,8 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'wpl': context.user_data.get('style_wpl', 2),
             'max_lines': context.user_data.get('style_max_lines', 1),
             'animation': context.user_data.get('style_animation', False),
-            'karaoke': context.user_data.get('style_karaoke', False)
+            'karaoke': context.user_data.get('style_karaoke', False),
+            'highlight_color_value': context.user_data.get('style_highlight_color_value', '&H0000FFFF')
         }
 
         # Запускаємо обробку в окремому потоці
@@ -807,6 +1009,31 @@ STYLE_COLORS = {
 }
 COLOR_NAMES = list(STYLE_COLORS.keys())
 
+# Highlight colors for karaoke (optimized for visibility)
+HIGHLIGHT_COLORS = {
+    'Жовтий': ('&H0000FFFF', '🟨'),
+    'Червоний': ('&H000000FF', '🟥'),
+    'Блакитний': ('&H00FFFF00', '🟦'),
+    'Зелений': ('&H0000FF00', '🟩'),
+    'Рожевий': ('&H00FF00FF', '🟪'),
+    'Помаранчевий': ('&H000099FF', '🟧'),
+    'Фіолетовий': ('&H00FF0080', '🟣'),
+    'Лаймовий': ('&H0000FF99', '💚'),
+    'Золотий': ('&H0000D7FF', '🔶'),
+    'Білий': ('&H00FFFFFF', '⬜'),
+    'Салатовий': ('&H0066FF99', '🟢'),
+}
+HIGHLIGHT_COLOR_NAMES = list(HIGHLIGHT_COLORS.keys())
+
+# Font colors with emojis
+STYLE_COLORS_EMOJI = {
+    'Білий': ('&H00FFFFFF', '⬜'),
+    'Жовтий': ('&H0000FFFF', '🟨'),
+    'Червоний': ('&H000000FF', '🟥'),
+    'Зелений': ('&H0000FF00', '🟩'),
+    'Синій': ('&H00FF0000', '🟦'),
+}
+
 STYLE_FONTS = [
     "Peace Sans",
     "Impact",
@@ -837,6 +1064,7 @@ def _get_settings_menu(user_data, menu_state='main'):
     
     anim = "✅" if user_data.get('style_animation', False) else "❌"
     karaoke = "✅" if user_data.get('style_karaoke', False) else "❌"
+    highlight_color = user_data.get('style_highlight_color_name', 'Жовтий')
     
     text = ""
     keyboard = []
@@ -864,12 +1092,16 @@ def _get_settings_menu(user_data, menu_state='main'):
             f"Колір: {color_name}\n"
             f"Тінь: {shadow} | Обводка: {outline}"
         )
+        # Create color buttons
+        color_buttons = []
+        for cname, (cval, emoji) in STYLE_COLORS_EMOJI.items():
+            color_buttons.append(InlineKeyboardButton(emoji, callback_data=f'pick_color_{cname}'))
+        
         keyboard = [
             [InlineKeyboardButton("Шрифт ›", callback_data='set_font_next')],
             [InlineKeyboardButton("- Розмір", callback_data='set_size_minus'),
              InlineKeyboardButton("+ Розмір", callback_data='set_size_plus')],
-            [InlineKeyboardButton("‹ Колір", callback_data='set_color_prev'),
-             InlineKeyboardButton("Колір ›", callback_data='set_color_next')],
+            color_buttons,
             [InlineKeyboardButton(f"Тінь {shadow}", callback_data='toggle_shadow'),
              InlineKeyboardButton(f"Обводка {outline}", callback_data='toggle_outline')],
             [InlineKeyboardButton("🔙 Назад", callback_data='menu_main')]
@@ -897,11 +1129,23 @@ def _get_settings_menu(user_data, menu_state='main'):
             f"✨ **Ефекти**\n\n"
             f"Pop-up Анімація: {anim}\n"
             f"Караоке (підсвітка): {karaoke}\n"
+            f"Колір підсвітки: {highlight_color}\n"
             f"_(Караоке змінює колір активного слова)_"
         )
+        # Create highlight color buttons - split into 2 rows
+        highlight_btns = []
+        for cname, (cval, emoji) in HIGHLIGHT_COLORS.items():
+            highlight_btns.append(InlineKeyboardButton(emoji, callback_data=f'pick_highlight_{cname}'))
+        
+        # Split into rows of 6
+        row1 = highlight_btns[:6]
+        row2 = highlight_btns[6:]
+        
         keyboard = [
             [InlineKeyboardButton(f"Анімація {anim}", callback_data='toggle_anim')],
             [InlineKeyboardButton(f"Караоке {karaoke}", callback_data='toggle_karaoke')],
+            row1,
+            row2,
             [InlineKeyboardButton("🔙 Назад", callback_data='menu_main')]
         ]
 
@@ -944,18 +1188,19 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         context.user_data.clear()
         return ConversationHandler.END
 
-    # Style Setters
-    if data == 'set_size_plus':
-        user_data['style_fontsize'] = user_data.get('style_fontsize', 93) + 5
+    # Font/Size Setters
+    elif data == 'set_size_plus':
+        current_size = user_data.get('style_fontsize', 93)
+        user_data['style_fontsize'] = min(current_size + 5, 200)
+        log.info(f"Font size increased to {user_data['style_fontsize']}")
     elif data == 'set_size_minus':
-        user_data['style_fontsize'] = max(10, user_data.get('style_fontsize', 93) - 5)
-    
+        current_size = user_data.get('style_fontsize', 93)
+        user_data['style_fontsize'] = max(current_size - 5, 30)
+        log.info(f"Font size decreased to {user_data['style_fontsize']}")
     elif data == 'set_font_next':
-        curr = user_data.get('style_font_name', STYLE_FONTS[0])
-        try: idx = STYLE_FONTS.index(curr)
-        except: idx = 0
-        idx = (idx + 1) % len(STYLE_FONTS)
-        user_data['style_font_name'] = STYLE_FONTS[idx]
+        current = user_data.get('style_font_name', STYLE_FONTS[0])
+        idx = STYLE_FONTS.index(current) if current in STYLE_FONTS else 0
+        user_data['style_font_name'] = STYLE_FONTS[(idx + 1) % len(STYLE_FONTS)]
 
     elif data == 'set_color_next':
         curr = user_data.get('style_color_name', 'Білий')
@@ -1000,6 +1245,26 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         user_data['style_animation'] = not user_data.get('style_animation', False)
     elif data == 'toggle_karaoke':
         user_data['style_karaoke'] = not user_data.get('style_karaoke', False)
+    
+    # Direct color pickers
+    elif data.startswith('pick_color_'):
+        color_name = data.replace('pick_color_', '')
+        log.info(f"Color picker triggered: {color_name}, available: {list(STYLE_COLORS_EMOJI.keys())}")
+        if color_name in STYLE_COLORS_EMOJI:
+            user_data['style_color_name'] = color_name
+            user_data['style_color_value'] = STYLE_COLORS_EMOJI[color_name][0]
+            log.info(f"Set color to {color_name}: {STYLE_COLORS_EMOJI[color_name][0]}")
+        else:
+            log.warning(f"Color {color_name} not found in STYLE_COLORS_EMOJI")
+    elif data.startswith('pick_highlight_'):
+        color_name = data.replace('pick_highlight_', '')
+        log.info(f"Highlight picker triggered: {color_name}, available: {list(HIGHLIGHT_COLORS.keys())}")
+        if color_name in HIGHLIGHT_COLORS:
+            user_data['style_highlight_color_name'] = color_name
+            user_data['style_highlight_color_value'] = HIGHLIGHT_COLORS[color_name][0]
+            log.info(f"Set highlight to {color_name}: {HIGHLIGHT_COLORS[color_name][0]}")
+        else:
+            log.warning(f"Highlight color {color_name} not found in HIGHLIGHT_COLORS")
 
     # Save settings
     current_settings = {
@@ -1013,7 +1278,9 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         'wpl': user_data.get('style_wpl'),
         'max_lines': user_data.get('style_max_lines'),
         'animation': user_data.get('style_animation'),
-        'karaoke': user_data.get('style_karaoke')
+        'karaoke': user_data.get('style_karaoke'),
+        'highlight_color_name': user_data.get('style_highlight_color_name'),
+        'highlight_color_value': user_data.get('style_highlight_color_value')
     }
     save_settings(query.message.chat_id, current_settings)
 
@@ -1023,16 +1290,15 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     # But since we don't store menu state in user_data, we can infer or just default to 'main' 
     # or try to guess. 
     # Better: Pass the menu state in callback data? e.g. 'set_size_plus:style'
-    # For now, let's infer based on the command group.
-    
+    # For now, simple heuristic based on data prefix
     next_menu = 'main'
-    if data.startswith('set_size') or data.startswith('set_font') or data.startswith('set_color') or 'shadow' in data or 'outline' in data:
+    if data.startswith('set_size') or data.startswith('set_color') or data.startswith('set_font') or data.startswith('toggle_shadow') or data.startswith('toggle_outline') or data.startswith('pick_color_'):
         next_menu = 'style'
-    elif 'wpl' in data or 'lines' in data or 'margin' in data:
+    elif data.startswith('set_wpl') or data.startswith('set_lines') or data.startswith('set_margin'):
         next_menu = 'layout'
-    elif 'anim' in data or 'karaoke' in data:
+    elif data.startswith('toggle_anim') or data.startswith('toggle_karaoke') or data.startswith('set_highlight') or data.startswith('pick_highlight_'):
         next_menu = 'effects'
-        
+    
     text, markup = _get_settings_menu(user_data, next_menu)
     try:
         await query.edit_message_text(text, reply_markup=markup, parse_mode='Markdown')
@@ -1106,7 +1372,7 @@ if __name__ == "__main__":
             STATE_RECEIVE_EDIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit),
                 # Додаємо обробку new_video сюди
-                CallbackQueryHandler(handle_settings_callback, pattern='^(menu_|set_|toggle_|process_|new_video)')
+                CallbackQueryHandler(handle_settings_callback, pattern='^(menu_|set_|toggle_|pick_|process_|new_video)')
             ],
         },
         fallbacks=[
