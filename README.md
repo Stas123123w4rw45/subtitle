@@ -1,46 +1,43 @@
----
-title: Subtitle Bot
-emoji: 🎬
-colorFrom: blue
-colorTo: purple
-sdk: docker
-pinned: false
----
+# Subtitle Bot 🎬
 
-# Subtitle Bot (Hugging Face Edition) 🚀
+Telegram бот для автоматичного додавання субтитрів до відео з підтримкою караоке, анімацій та налаштувань.
 
-Telegram bot for generating subtitles with animated word highlights.
+## Особливості
+- 🎨 Налаштування шрифтів, кольорів, розмірів
+- 🎤 Караоке режим з кольоровою підсвіткою слів
+- ✨ Анімація активного слова
+- 📐 Розумна розмітка з урахуванням пунктуації
+- 🟨 Вибір кольорів через emoji-кнопки
 
-## Features
+## Налаштування для Hugging Face Spaces
 
-- **Automatic Transcription**: Uses Groq API (Whisper) for fast and accurate transcription.
-- **Animated Subtitles**: Generates video with animated subtitles.
-- **Word Highlight**: Active words are highlighted with a rounded background animation.
-- **Customization**: Adjustable font size, color, font face, and bottom margin.
+### Обов'язкові секрети:
+1. Перейдіть в Settings → Repository secrets
+2. Додайте:
+   - `TELEGRAM_BOT_TOKEN` — токен вашого Telegram бота (отримайте від @BotFather)
+   - `GROQ_API_KEY` — API ключ від Groq (отримайте на https://console.groq.com)
 
-## Setup
+### Запуск локально:
+```bash
+# Встановіть залежності
+pip install -r requirements.txt
 
-1.  Clone the repository.
-2.  Install dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
-3.  Install FFmpeg.
-4.  Set environment variables:
-    - `TELEGRAM_BOT_TOKEN`: Your Telegram Bot Token.
-    - `GROQ_API_KEY`: Your Groq API Key.
+# Створіть .env файл
+echo "TELEGRAM_BOT_TOKEN=your_token" > .env
+echo "GROQ_API_KEY=your_key" >> .env
 
-## Usage
+# Запустіть бота
+python3 bot.py
+```
 
-1.  Run the bot:
-    ```bash
-    python bot.py
-    ```
-2.  Send a video or audio file to the bot on Telegram.
-3.  The bot will transcribe the audio and ask for confirmation/editing of the text.
-4.  Customize the style using the inline keyboard.
-5.  The bot will send back the video with burned-in subtitles.
+## Використання
+1. Надішліть відео боту
+2. Отримайте автоматичну розшифровку
+3. Налаштуйте стиль (шрифт, колір, анімації)
+4. Отримайте відео з субтитрами!
 
-## New Feature: Animated Word Highlight
-
-The bot now supports a "WordHighlight" style. Each active word is individually highlighted with a rounded background effect that animates smoothly. This is achieved using advanced ASS subtitle styling.
+## Технології
+- Python 3.10+
+- python-telegram-bot
+- Groq API (транскрипція)
+- FFmpeg (обробка відео)
