@@ -1387,20 +1387,14 @@ if __name__ == "__main__":
     PORT = int(os.getenv("PORT", "7860"))
 
     if RENDER_EXTERNAL_URL:
-        # Wait for network before starting webhook
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(wait_for_network())
-        
-        webhook_url = f"{RENDER_EXTERNAL_URL}/{TELEGRAM_BOT_TOKEN}"
-        log.info(f"Starting in WEBHOOK mode. Port: {PORT}, URL: {RENDER_EXTERNAL_URL}")
-        log.info(f"Setting webhook to: {webhook_url}")
+        # Webhook mode for Render/Hugging Face
+        log.info(f"Running in webhook mode on port {PORT}")
+        log.info("Starting bot...")
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path=TELEGRAM_BOT_TOKEN,
-            webhook_url=webhook_url,
-            allowed_updates=Update.ALL_TYPES
+            url_path="",
+            webhook_url=RENDER_EXTERNAL_URL
         )
     else:
-        log.info("Starting in POLLING mode...")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
