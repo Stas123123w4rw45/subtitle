@@ -1,21 +1,17 @@
 #!/bin/bash
 
-# Check for environment variables
-if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-    echo "❌ Error: TELEGRAM_BOT_TOKEN is not set."
-    exit 1
-fi
-
-if [ -z "$GROQ_API_KEY" ]; then
-    echo "❌ Error: GROQ_API_KEY is not set."
-    exit 1
-fi
+# Show what we have
+echo "================================"
+echo "Environment Check:"
+echo "================================"
+echo "TELEGRAM_BOT_TOKEN set: $([[ -n \"$TELEGRAM_BOT_TOKEN\" ]] && echo 'YES'  || echo 'NO')"
+echo "GROQ_API_KEY set: $([[ -n \"$GROQ_API_KEY\" ]] && echo 'YES' || echo 'NO')"
+echo "================================"
 
 # Install dependencies
 echo "Installing dependencies..."
 pip install -r requirements.txt
 
-# Start Bot
+# Start Bot via app.py (which checks secrets)
 echo "Starting Telegram Bot..."
-sleep 5 # Wait for network/DNS to settle
-python3 bot.py
+python3 app.py
