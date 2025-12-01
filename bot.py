@@ -557,14 +557,14 @@ def write_ass_styled(out_path, events, style_settings):
         # Calculate base position
         current_y = y_pos
         
-        # If fewer lines than max, shift down to center vertically
+        # If fewer lines than max, shift up to center vertically
         if num_lines < max_lines_setting:
-            # Each line takes fontsize * 1.2 spacing
-            total_height_used = num_lines * (fontsize * 1.2)
-            total_height_available = max_lines_setting * (fontsize * 1.2)
-            missing_space = total_height_available - total_height_used
-            # Shift down by half of the missing space to center
-            current_y = int(y_pos + missing_space / 2)
+            # For each missing line, shift up by half of line spacing
+            # This centers between where lines would be
+            missing_lines = max_lines_setting - num_lines
+            shift_per_line = fontsize * 1.2 / 2  # Half of line spacing
+            total_shift = missing_lines * shift_per_line
+            current_y = int(y_pos - total_shift)
             
         s_time = ass_time(t0)
         e_time = ass_time(t1)
