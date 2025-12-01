@@ -1353,7 +1353,9 @@ async def wait_for_network():
             
     log.error("Network check failed after max retries. Proceeding anyway...")
 
-if __name__ == "__main__":
+
+def main():
+    """Main function to start the bot"""
     if "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" in TELEGRAM_BOT_TOKEN:
         log.error("Вкажіть TELEGRAM_BOT_TOKEN!")
         sys.exit(1)
@@ -1371,7 +1373,6 @@ if __name__ == "__main__":
         states={
             STATE_RECEIVE_EDIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit),
-                # Додаємо обробку new_video сюди
                 CallbackQueryHandler(handle_settings_callback, pattern='^(menu_|set_|toggle_|pick_|process_|new_video)')
             ],
         },
@@ -1397,4 +1398,8 @@ if __name__ == "__main__":
             webhook_url=RENDER_EXTERNAL_URL
         )
     else:
+        log.info("Running in polling mode...")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()

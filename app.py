@@ -53,4 +53,19 @@ if not bot_token or not groq_key:
     sys.exit(1)
 
 print("\n✅ ALL SECRETS FOUND! Starting bot...")
-import bot
+print("Attempting to import bot module...")
+
+try:
+    import bot
+    print("✅ Bot module imported successfully!")
+    print("Starting bot.main()...")
+    bot.main()
+except Exception as e:
+    print(f"\n❌ FAILED TO START BOT!")
+    print(f"Error type: {type(e).__name__}")
+    print(f"Error message: {e}")
+    import traceback
+    print("\nFull traceback:")
+    traceback.print_exc()
+    import sys
+    sys.exit(1)
