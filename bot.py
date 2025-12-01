@@ -550,18 +550,21 @@ def write_ass_styled(out_path, events, style_settings):
         text_fg = ev['fg']
         boxes = ev.get('boxes', [])
         
-        # Dynamic Vertical Centering based on FG text
+        # Dynamic Vertical Centering based on actual line count
         num_lines = text_fg.count(r"\N") + 1
+        max_lines_setting = style_settings.get('max_lines', 1)
+        
+        # Calculate base position
         current_y = y_pos
         
-        # Better centering: shift based on missing lines
-        max_lines_setting = style_settings.get('max_lines', 1)
+        # If fewer lines than max, shift down to center vertically
         if num_lines < max_lines_setting:
-            # Center vertically by adjusting for missing lines
             # Each line takes fontsize * 1.2 spacing
-            missing_lines = max_lines_setting - num_lines
-            shift = missing_lines * (fontsize * 1.2) / 2  # Half of missing space
-            current_y = int(y_pos - shift)
+            total_height_used = num_lines * (fontsize * 1.2)
+            total_height_available = max_lines_setting * (fontsize * 1.2)
+            missing_space = total_height_available - total_height_used
+            # Shift down by half of the missing space to center
+            current_y = int(y_pos + missing_space / 2)
             
         s_time = ass_time(t0)
         e_time = ass_time(t1)
