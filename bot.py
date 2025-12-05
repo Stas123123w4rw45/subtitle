@@ -852,6 +852,24 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return STATE_RECEIVE_VIDEO if context.user_data else ConversationHandler.END
 
     try:
+        # Check file size BEFORE attempting download
+        # Telegram Bot API has 20MB limit for get_file()
+        file_size_mb = video_input.file_size / (1024 * 1024) if hasattr(video_input, 'file_size') and video_input.file_size else 0
+        
+        if file_size_mb > 20:
+            await message.reply_text(
+                f"❌ **Файл занадто великий!**\n\n"
+                f"📊 Розмір: {file_size_mb:.1f} MB\n"
+                f"⚠️ Обмеження Telegram Bot API: 20 MB\n\n"
+                f"**Рішення:**\n"
+                f"1️⃣ Стисніть відео перед відправкою\n"
+                f"2️⃣ Надішліть коротше відео\n"
+                f"3️⃣ Зменшіть роздільність (наприклад, до 720p)\n\n"
+                f"_Це обмеження Telegram, на жаль не можу його обійти_ 😔",
+                parse_mode='Markdown'
+            )
+            return ConversationHandler.END
+        
         file_name = video_input.file_name or "video.mp4"
         await message.reply_text("Завантажую відео... ⏳")
 
