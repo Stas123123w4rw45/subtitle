@@ -557,13 +557,21 @@ def write_ass_styled(out_path, events, style_settings):
         # Calculate base position
         current_y = y_pos
         
-        # If fewer lines than max, shift up to center vertically
+        # If fewer lines than max, shift to center vertically
         if num_lines < max_lines_setting:
-            # For each missing line, shift up by half of line spacing
-            # This centers between where lines would be
-            missing_lines = max_lines_setting - num_lines
-            shift_per_line = fontsize * 1.2 / 2  # Half of line spacing
-            total_shift = missing_lines * shift_per_line
+            # Calculate the total vertical space for max_lines
+            # Line spacing is 1.2 * fontsize between lines
+            # Total height = (max_lines - 1) * line_spacing
+            # We want to center num_lines within this total height
+            
+            # Total height that would be occupied by max_lines
+            max_height = (max_lines_setting - 1) * (fontsize * 1.2)
+            
+            # Actual height occupied by num_lines
+            actual_height = (num_lines - 1) * (fontsize * 1.2)
+            
+            # Shift up by half the difference to center vertically
+            total_shift = (max_height - actual_height) / 2
             current_y = int(y_pos - total_shift)
             
         s_time = ass_time(t0)
@@ -678,8 +686,24 @@ def get_video_duration(file_path):
         log.error(f"Error getting duration: {e}")
     return 0
 
+def get_video_resolution(file_path):
+    """Returns video width and height."""
+    try:
+        ff = find_ffmpeg()
+        cmd = [ff, "-i", file_path]
+        result = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, encoding='utf-8')
+        # Search for resolution like "1920x1080" or "1080x1920"
+        match = re.search(r"(\d{3,4})x(\d{3,4})", result.stderr)
+        if match:
+            width = int(match.group(1))
+            height = int(match.group(2))
+            return width, height
+    except Exception as e:
+        log.error(f"Error getting resolution: {e}")
+    return None, None
+
 def compress_video(input_path, target_size_mb=49.0):
-    """Compresses video to target size using bitrate control."""
+    """Compresses video to target size using bitrate control and resolution scaling."""
     log.info(f"Compressing {input_path} to {target_size_mb}MB...")
     
     duration = get_video_duration(input_path)
@@ -687,6 +711,8 @@ def compress_video(input_path, target_size_mb=49.0):
         log.error("Could not determine duration for compression.")
         return input_path # Return original if fail
 
+    width, height = get_video_resolution(input_path)
+    
     # Calculate target bitrate
     # Size = (VideoBitrate + AudioBitrate) * Duration / 8
     # TargetBits = TargetMB * 8 * 1024 * 1024
@@ -705,7 +731,21 @@ def compress_video(input_path, target_size_mb=49.0):
     base_name = os.path.splitext(os.path.basename(input_path))[0]
     out_path = os.path.join(dir_name, f"{base_name}_compressed.mp4")
     
-    # Single pass with bitrate control is usually enough for this purpose
+    # Determine if we need to scale down resolution
+    # For very low bitrates, reducing resolution helps maintain quality
+    scale_filter = ""
+    if width and height:
+        max_dimension = max(width, height)
+        # If bitrate is very low or resolution is very high, scale down to 720p
+        if video_bitrate_kbit < 500 or max_dimension > 1280:
+            # Scale to 720p max dimension while maintaining aspect ratio
+            if width > height:  # Landscape
+                scale_filter = "-vf scale=-2:720"
+            else:  # Portrait or square
+                scale_filter = "-vf scale=720:-2"
+            log.info(f"Scaling video from {width}x{height} to improve quality at lower bitrate")
+    
+    # Single pass with bitrate control
     # We use -maxrate and -bufsize to constrain it
     cmd = [
         ff, "-y", "-i", input_path,
@@ -714,9 +754,15 @@ def compress_video(input_path, target_size_mb=49.0):
         "-maxrate", f"{video_bitrate_kbit * 1.5}k",
         "-bufsize", f"{video_bitrate_kbit * 2}k",
         "-preset", "veryfast",
-        "-c:a", "aac", "-b:a", "128k",
-        out_path
+        "-c:a", "aac", "-b:a", "128k"
     ]
+    
+    # Add scale filter if needed
+    if scale_filter:
+        cmd.insert(4, scale_filter.split()[0])
+        cmd.insert(5, scale_filter.split()[1])
+    
+    cmd.append(out_path)
     
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
