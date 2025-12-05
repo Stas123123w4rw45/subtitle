@@ -590,6 +590,11 @@ def write_ass_styled(out_path, events, style_settings):
             total_shift = (max_height - actual_height) / 2
             current_y = int(y_pos - total_shift)
             
+            # Debug logging
+            log.info(f"🔍 Vertical Centering:")
+            log.info(f"  Lines: {num_lines}/{max_lines_setting} (actual/max)")
+            log.info(f"  Base Y: {y_pos}, Shift: {total_shift:.1f}, Final Y: {current_y}")
+            
         s_time = ass_time(t0)
         e_time = ass_time(t1)
         
