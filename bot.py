@@ -13,7 +13,23 @@ import json
 import gc
 from groq import Groq 
 
-SETTINGS_FILE = "user_settings.json"
+# Settings file path - use Railway Volume if available, fallback to local
+# On Railway with Volume mounted at /app/data, this will persist across restarts
+SETTINGS_DIR = "/app/data" if os.path.exists("/app/data") else "."
+SETTINGS_FILE = os.path.join(SETTINGS_DIR, "user_settings.json")
+
+# Ensure settings directory exists
+try:
+    os.makedirs(SETTINGS_DIR, exist_ok=True)
+    # Test write permissions
+    test_file = os.path.join(SETTINGS_DIR, ".test_write")
+    with open(test_file, 'w') as f:
+        f.write("test")
+    os.remove(test_file)
+    print(f"✅ Settings directory ready: {SETTINGS_DIR}")
+except Exception as e:
+    print(f"⚠️ Settings directory issue: {e}, using current directory")
+    SETTINGS_FILE = "user_settings.json"
 
 def load_settings(chat_id):
     try:
@@ -22,7 +38,7 @@ def load_settings(chat_id):
                 data = json.load(f)
                 return data.get(str(chat_id), {})
     except Exception as e:
-        log.error(f"Error loading settings: {e}")
+        print(f"Error loading settings: {e}")  # Use print before logging is configured
     return {}
 
 def save_settings(chat_id, settings):
@@ -36,9 +52,9 @@ def save_settings(chat_id, settings):
         data[str(chat_id)] = settings
         
         with open(SETTINGS_FILE, 'w') as f:
-            json.dump(data, f)
+            json.dump(data, f, indent=2)  # Added indent for readability
     except Exception as e:
-        log.error(f"Error saving settings: {e}") 
+        print(f"Error saving settings: {e}")  
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -703,7 +719,13 @@ def get_video_resolution(file_path):
     return None, None
 
 def compress_video(input_path, target_size_mb=49.0):
-    """Compresses video to target size using bitrate control and resolution scaling."""
+    """
+    Compresses video using intelligent two-pass strategy:
+    1. First attempt: Compress at original resolution (Full HD if possible)
+    2. If result > 49MB: Compress again at 720p
+    
+    This preserves quality for videos that can be compressed without resolution reduction.
+    """
     log.info(f"Compressing {input_path} to {target_size_mb}MB...")
     
     duration = get_video_duration(input_path)
@@ -729,25 +751,56 @@ def compress_video(input_path, target_size_mb=49.0):
     ff = find_ffmpeg()
     dir_name = os.path.dirname(input_path)
     base_name = os.path.splitext(os.path.basename(input_path))[0]
-    out_path = os.path.join(dir_name, f"{base_name}_compressed.mp4")
     
-    # Determine if we need to scale down resolution
-    # For very low bitrates, reducing resolution helps maintain quality
+    # PASS 1: Try compressing at original resolution (preserve Full HD)
+    log.info("Pass 1: Attempting compression at original resolution...")
+    out_path_hd = os.path.join(dir_name, f"{base_name}_compressed_hd.mp4")
+    
+    cmd_hd = [
+        ff, "-y", "-i", input_path,
+        "-c:v", "libx264",
+        "-b:v", f"{video_bitrate_kbit}k",
+        "-maxrate", f"{video_bitrate_kbit * 1.5}k",
+        "-bufsize", f"{video_bitrate_kbit * 2}k",
+        "-preset", "veryfast",
+        "-c:a", "aac", "-b:a", "128k",
+        out_path_hd
+    ]
+    
+    subprocess.run(cmd_hd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    # Check if HD version fits within limit
+    if os.path.exists(out_path_hd):
+        hd_size_mb = os.path.getsize(out_path_hd) / (1024 * 1024)
+        log.info(f"Pass 1 result: {hd_size_mb:.2f}MB")
+        
+        if hd_size_mb <= target_size_mb:
+            # Success! HD version fits
+            log.info(f"✅ Full HD compression successful: {hd_size_mb:.2f}MB")
+            return out_path_hd
+        else:
+            # HD version too large, need to reduce resolution
+            log.info(f"⚠️ HD version too large ({hd_size_mb:.2f}MB), reducing to 720p...")
+            # Clean up HD attempt
+            try:
+                os.remove(out_path_hd)
+            except:
+                pass
+    
+    # PASS 2: Compress with 720p resolution
+    log.info("Pass 2: Compressing with 720p resolution...")
+    out_path_720 = os.path.join(dir_name, f"{base_name}_compressed.mp4")
+    
+    # Determine scale filter for 720p
     scale_filter = ""
     if width and height:
-        max_dimension = max(width, height)
-        # If bitrate is very low or resolution is very high, scale down to 720p
-        if video_bitrate_kbit < 500 or max_dimension > 1280:
-            # Scale to 720p max dimension while maintaining aspect ratio
-            if width > height:  # Landscape
-                scale_filter = "-vf scale=-2:720"
-            else:  # Portrait or square
-                scale_filter = "-vf scale=720:-2"
-            log.info(f"Scaling video from {width}x{height} to improve quality at lower bitrate")
+        if width > height:  # Landscape
+            scale_filter = "scale=-2:720"
+        else:  # Portrait or square
+            scale_filter = "scale=720:-2"
+        log.info(f"Scaling from {width}x{height} to 720p")
     
-    # Single pass with bitrate control
-    # We use -maxrate and -bufsize to constrain it
-    cmd = [
+    cmd_720 = [
         ff, "-y", "-i", input_path,
         "-c:v", "libx264",
         "-b:v", f"{video_bitrate_kbit}k",
@@ -757,17 +810,22 @@ def compress_video(input_path, target_size_mb=49.0):
         "-c:a", "aac", "-b:a", "128k"
     ]
     
-    # Add scale filter if needed
+    # Add scale filter
     if scale_filter:
-        cmd.insert(4, scale_filter.split()[0])
-        cmd.insert(5, scale_filter.split()[1])
+        cmd_720.insert(4, "-vf")
+        cmd_720.insert(5, scale_filter)
     
-    cmd.append(out_path)
+    cmd_720.append(out_path_720)
     
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(cmd_720, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-        return out_path
+    if os.path.exists(out_path_720):
+        size_720_mb = os.path.getsize(out_path_720) / (1024 * 1024)
+        log.info(f"✅ 720p compression complete: {size_720_mb:.2f}MB")
+        return out_path_720
+    
+    # If both failed, return original
+    return input_path
     return input_path
 
 # --- Функції Telegram Бота ---
