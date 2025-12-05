@@ -575,25 +575,31 @@ def write_ass_styled(out_path, events, style_settings):
         
         # If fewer lines than max, shift to center vertically
         if num_lines < max_lines_setting:
+            # IMPORTANT: Alignment 5 (center-center) means \pos(x,y) places text
+            # with its CENTER at position y, not its baseline or top.
+            # So we need to calculate where the center should be.
+            
             # Calculate the total vertical space for max_lines
             # Line spacing is 1.2 * fontsize between lines
-            # Total height = (max_lines - 1) * line_spacing
-            # We want to center num_lines within this total height
+            line_spacing = fontsize * 1.2
             
-            # Total height that would be occupied by max_lines
-            max_height = (max_lines_setting - 1) * (fontsize * 1.2)
+            # For max_lines, the vertical range from top of first line to bottom of last line:
+            # If max_lines=2: range from line1_center to line2_center = 1 * line_spacing
+            # If max_lines=3: range from line1_center to line3_center = 2 * line_spacing
+            max_range = (max_lines_setting - 1) * line_spacing
             
-            # Actual height occupied by num_lines
-            actual_height = (num_lines - 1) * (fontsize * 1.2)
+            # For num_lines=1 (single line), we want it centered in that range
+            # The center of the range is at: y_pos - (max_range / 2)
+            # This places the single line exactly between where line1 and line_max would be
             
-            # Shift up by half the difference to center vertically
-            total_shift = (max_height - actual_height) / 2
+            total_shift = max_range / 2
             current_y = int(y_pos - total_shift)
             
             # Debug logging
             log.info(f"🔍 Vertical Centering:")
             log.info(f"  Lines: {num_lines}/{max_lines_setting} (actual/max)")
-            log.info(f"  Base Y: {y_pos}, Shift: {total_shift:.1f}, Final Y: {current_y}")
+            log.info(f"  Base Y: {y_pos}, Max range: {max_range:.1f}, Shift: {total_shift:.1f}")
+            log.info(f"  Final Y: {current_y} (this is CENTER of text due to Alignment 5)")
             
         s_time = ass_time(t0)
         e_time = ass_time(t1)
