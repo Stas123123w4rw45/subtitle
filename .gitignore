@@ -1,0 +1,26 @@
+# Environment variables
+.env
+
+# User settings
+user_settings.json
+
+# FFmpeg binaries
+ffmpeg
+ffmpeg.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# System
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.log
+tmp/
+temp/
