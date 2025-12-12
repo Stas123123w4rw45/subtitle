@@ -66,6 +66,31 @@ except ImportError as e:
 
 # save_settings is now imported from database module or defined as fallback above  
 
+# Import analytics module
+try:
+    from analytics import init_analytics_table, log_event, get_stats_today, get_stats_week, get_stats_month, get_top_users
+    USE_ANALYTICS = True
+    print("✅ Analytics module imported successfully")
+except ImportError as e:
+    print(f"⚠️ Analytics module not available: {e}")
+    USE_ANALYTICS = False
+    # Dummy functions
+    def log_event(chat_id, event_type, event_data=None):
+        pass
+    def get_stats_today():
+        return {"error": "Analytics not available"}
+    def get_stats_week():
+        return {"error": "Analytics not available"}
+    def get_stats_month():
+        return {"error": "Analytics not available"}
+
+# Admin configuration
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "1236683290")  # Стас
+
+def is_admin(chat_id) -> bool:
+    """Check if user is admin"""
+    return str(chat_id) == str(ADMIN_CHAT_ID)  
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes,
@@ -854,7 +879,163 @@ def compress_video(input_path, target_size_mb=49.0):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привіт! Надішліть мені відео або аудіо для обробки.")
     context.user_data.clear()
+    
+    # Log event
+    if USE_ANALYTICS:
+        log_event(update.message.chat_id, 'user_started')
+    
     return ConversationHandler.END
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to view bot statistics"""
+    chat_id = update.message.chat_id
+    
+    # Check if user is admin
+    if not is_admin(chat_id):
+        await update.message.reply_text("❌ Ця команда доступна тільки адміністратору.")
+        return
+    
+    if not USE_ANALYTICS:
+        await update.message.reply_text("⚠️ Аналітика недоступна. Перевірте налаштування бази даних.")
+        return
+    
+    # Create menu with period selection
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 Сьогодні", callback_data="stats_today"),
+            InlineKeyboardButton("📊 Тиждень", callback_data="stats_week")
+        ],
+        [
+            InlineKeyboardButton("📈 Місяць", callback_data="stats_month"),
+            InlineKeyboardButton("🔄 Оновити", callback_data="stats_refresh")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "📊 **Статистика Бота**\n\n"
+        "Оберіть період для перегляду:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+def format_stats_report(stats: dict) -> str:
+    """Formats statistics into a readable text report"""
+    if "error" in stats:
+        return f"❌ Помилка: {stats['error']}"
+    
+    period = stats.get('period', 'unknown')
+    general = stats.get('general', {})
+    events_by_type = stats.get('events_by_type', [])
+    
+    # Header
+    if period == 'today':
+        title = f"📅 Статистика за Сьогодні ({stats.get('date', '')})"
+    elif period == 'week':
+        title = f"📊 Статистика за Тиждень (з {stats.get('start_date', '')})"
+    else:
+        title = f"📈 Статистика за Місяць (з {stats.get('start_date', '')})"
+    
+    report = f"**{title}**\n\n"
+    
+    # General stats
+    total_users = general.get('unique_users', 0)
+    total_events = general.get('total_events', 0)
+    
+    report += f"👥 **Користувачі:** {total_users}\n"
+    report += f"📊 **Всього подій:** {total_events}\n\n"
+    
+    # Events by type
+    if events_by_type:
+        report += "**📋 Події:**\n"
+        
+        videos_processed = 0
+        videos_uploaded = 0
+        
+        for event in events_by_type:
+            event_type = event.get('event_type', 'unknown')
+            count = event.get('count', 0)
+            
+            if event_type == 'video_processed':
+                videos_processed = count
+                report += f"  ✅ Відео оброблено: **{count}**\n"
+            elif event_type == 'video_uploaded':
+                videos_uploaded = count
+                report += f"  📤 Відео завантажено: **{count}**\n"
+            elif event_type == 'user_started':
+                report += f"  🆕 Нові користувачі: {count}\n"
+            elif event_type == 'settings_changed':
+                report += f"  ⚙️ Зміна налаштувань: {count}\n"
+            elif event_type == 'error_occurred':
+                report += f"  ❌ Помилки: {count}\n"
+        
+        report += "\n"
+    
+    # Activity chart for today
+    if period == 'today' and 'hourly_distribution' in stats:
+        hourly = stats['hourly_distribution']
+        if hourly:
+            report += "**📊 Активність по годинах:**\n"
+            max_count = max([h.get('count', 0) for h in hourly], default=1)
+            
+            for h in hourly:
+                hour = int(h.get('hour', 0))
+                count = h.get('count', 0)
+                bar_length = int((count / max_count) * 10) if max_count > 0 else 0
+                bar = "█" * bar_length
+                report += f"  {hour:02d}:00 {bar} {count}\n"
+    
+    return report
+
+async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle stats menu button clicks"""
+    query = update.callback_query
+    await query.answer()
+    
+    chat_id = query.message.chat_id
+    
+    # Check admin
+    if not is_admin(chat_id):
+        await query.edit_message_text("❌ Ця команда доступна тільки адміністратору.")
+        return
+    
+    data = query.data
+    
+    # Get stats based on period
+    if data == "stats_today":
+        stats = get_stats_today()
+        report = format_stats_report(stats)
+    elif data == "stats_week":
+        stats = get_stats_week()
+        report = format_stats_report(stats)
+    elif data == "stats_month":
+        stats = get_stats_month()
+        report = format_stats_report(stats)
+    elif data == "stats_refresh":
+        # Refresh current view (default to today)
+        stats = get_stats_today()
+        report = format_stats_report(stats)
+    else:
+        report = "❌ Невідома команда"
+    
+    # Add back button
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 Сьогодні", callback_data="stats_today"),
+            InlineKeyboardButton("📊 Тиждень", callback_data="stats_week")
+        ],
+        [
+            InlineKeyboardButton("📈 Місяць", callback_data="stats_month"),
+            InlineKeyboardButton("🔄 Оновити", callback_data="stats_refresh")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        report,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 async def handle_new_video_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка кнопки 'Завантажити нове відео'."""
@@ -958,6 +1139,10 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text(f"```\n{clean_text[i:i+4000]}\n```", parse_mode='Markdown')
         else:
             await message.reply_text(f"```\n{clean_text}\n```", parse_mode='Markdown')
+        
+        # Log analytics event
+        if USE_ANALYTICS:
+            log_event(message.chat_id, 'video_uploaded', {'size_mb': round(file_size_mb, 2)})
         
         text_menu, keyboard = _get_settings_menu(context.user_data, 'main')
         await message.reply_text(text_menu, reply_markup=keyboard, parse_mode='Markdown')
@@ -1127,6 +1312,15 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 connect_timeout=120
             )
             log.info(f"Відео надіслано: {chat_id}")
+            
+            # Log analytics event
+            if USE_ANALYTICS:
+                style_settings = {
+                    'fontsize': context.user_data.get('style_fontsize'),
+                    'fontname': context.user_data.get('style_font_name'),
+                    'color_name': context.user_data.get('style_color_name')
+                }
+                log_event(chat_id, 'video_processed', style_settings)
 
             # --- [BUTTON FOR SUBTITLES] ---
             # Don't clean up yet. Offer to download subtitles.
@@ -1659,12 +1853,27 @@ def main():
         log.info("📁 Using JSON file for settings storage")
         print("📁 Using JSON file for settings storage")
     
+    # Initialize analytics table
+    if USE_ANALYTICS:
+        log.info("Initializing analytics...")
+        print("🔄 Initializing analytics table...")
+        if init_analytics_table():
+            log.info("✅ Analytics ready")
+            print("✅ Analytics initialized and ready")
+        else:
+            log.warning("⚠️ Analytics initialization failed")
+            print("⚠️ Analytics initialization failed")
+    
     if "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" in TELEGRAM_BOT_TOKEN:
         log.error("Вкажіть TELEGRAM_BOT_TOKEN!")
         sys.exit(1)
         
     log.info("Створюємо додаток бота...")
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).connect_timeout(30).read_timeout(30).build()
+    
+    # Admin commands
+    application.add_handler(CommandHandler('stats', stats_command))
+    application.add_handler(CallbackQueryHandler(handle_stats_callback, pattern="^stats_"))
     
     application.add_handler(MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.AUDIO, handle_audio_transcription))
 
