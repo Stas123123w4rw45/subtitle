@@ -1118,6 +1118,32 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             log.info(f"Відео надіслано: {chat_id}")
 
+            # --- [ВІДПРАВКА ОКРЕМОГО ФАЙЛУ СУБТИТРІВ] ---
+            ass_path = os.path.join(tmp_dir, "subs.ass")
+            if os.path.exists(ass_path):
+                # Формуємо красиву назву для файлу
+                original_filename = os.path.basename(processed_path)
+                # Якщо файл стиснутий, він може мати іншу назву, але це ок.
+                # Візьмемо базу без розширення
+                base_name = os.path.splitext(original_filename)[0]
+                # Прибираємо суфікси типу _subs або _compressed якщо хочемо чистіше, 
+                # але простіше лишити як є, щоб збігалося з відео.
+                
+                ass_filename = f"{base_name}.ass"
+                
+                await context.bot.send_message(chat_id, "📂 Ось ваші субтитри окремим файлом:")
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=open(ass_path, 'rb'),
+                    filename=ass_filename,
+                    caption="Ви можете використати цей файл у відеоредакторі (наприклад, CapCut, Premiere Pro).",
+                    read_timeout=60, 
+                    write_timeout=60, 
+                    connect_timeout=60
+                )
+                log.info(f"Субтитри надіслано: {chat_id}")
+            # ----------------------------------------------
+
     except Exception as e:
         log.error(f"Помилка (run_processing): {e}", exc_info=True)
         await context.bot.send_message(chat_id=chat_id, text=f"Помилка: {e}")
