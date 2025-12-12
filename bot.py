@@ -1268,10 +1268,6 @@ async def handle_cancel_cleanup(update: Update, context: ContextTypes.DEFAULT_TY
 # --- Стилі та Меню ---
 
 STYLE_COLORS = {
-
-# --- Стилі та Меню ---
-
-STYLE_COLORS = {
     'Білий': '&H00FFFFFF',
     'Жовтий': '&H0000FFFF',
     'Червоний': '&H000000FF',
