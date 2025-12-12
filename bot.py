@@ -1178,6 +1178,7 @@ def generate_green_screen_video(original_video_path, ass_path):
     dir_name = os.path.dirname(ass_path)
     out_path = os.path.join(dir_name, "chromakey_subtitles.mp4")
     
+    cmd = [
         ff, "-y",
         "-f", "lavfi", "-i", f"color=c=0x00FF00:s={width}x{height}:d={duration}",
         "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", # Silent audio
