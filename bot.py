@@ -1181,11 +1181,14 @@ def generate_green_screen_video(original_video_path, ass_path):
     cmd = [
         ff, "-y",
         "-f", "lavfi", "-i", f"color=c=0x00FF00:s={width}x{height}:d={duration}",
-        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", # Silent audio
         "-vf", vf_filter,
-        "-c:v", "libx264", "-preset", "superfast", "-pix_fmt", "yuv420p", "-profile:v", "main",
-        "-c:a", "aac", "-shortest", # Audio encoding
-        "-movflags", "+faststart",
+        "-c:v", "libx264",
+        "-crf", "23",  # Same as main video
+        "-preset", "superfast",  # Same as main video
+        "-threads", "2",  # Same as main video
+        "-max_muxing_queue_size", "1024",  # Same as main video
+        "-movflags", "+faststart",  # Same as main video
+        "-c:a", "copy",  # Copy audio (though there's none from lavfi source)
         out_path
     ]
     
