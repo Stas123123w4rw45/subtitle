@@ -13,48 +13,58 @@ import json
 import gc
 from groq import Groq 
 
-# Settings file path - use Railway Volume if available, fallback to local
-# On Railway with Volume mounted at /app/data, this will persist across restarts
-SETTINGS_DIR = "/app/data" if os.path.exists("/app/data") else "."
-SETTINGS_FILE = os.path.join(SETTINGS_DIR, "user_settings.json")
-
-# Ensure settings directory exists
+# Import database module for PostgreSQL settings storage
 try:
-    os.makedirs(SETTINGS_DIR, exist_ok=True)
-    # Test write permissions
-    test_file = os.path.join(SETTINGS_DIR, ".test_write")
-    with open(test_file, 'w') as f:
-        f.write("test")
-    os.remove(test_file)
-    print(f"✅ Settings directory ready: {SETTINGS_DIR}")
-except Exception as e:
-    print(f"⚠️ Settings directory issue: {e}, using current directory")
-    SETTINGS_FILE = "user_settings.json"
-
-def load_settings(chat_id):
+    from database import init_db, load_settings, save_settings, get_stats
+    USE_DATABASE = True
+    print("✅ Database module imported successfully")
+except ImportError as e:
+    print(f"⚠️ Database module not available: {e}")
+    USE_DATABASE = False
+    # Fallback to JSON file
+    SETTINGS_DIR = "/app/data" if os.path.exists("/app/data") else "."
+    SETTINGS_FILE = os.path.join(SETTINGS_DIR, "user_settings.json")
+    
+    # Ensure settings directory exists
     try:
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r') as f:
-                data = json.load(f)
-                return data.get(str(chat_id), {})
+        os.makedirs(SETTINGS_DIR, exist_ok=True)
+        test_file = os.path.join(SETTINGS_DIR, ".test_write")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        print(f"✅ Settings directory ready: {SETTINGS_DIR}")
     except Exception as e:
-        print(f"Error loading settings: {e}")  # Use print before logging is configured
-    return {}
+        print(f"⚠️ Settings directory issue: {e}, using current directory")
+        SETTINGS_FILE = "user_settings.json"
+    
+    def load_settings(chat_id):
+        """Fallback JSON-based settings loader"""
+        try:
+            if os.path.exists(SETTINGS_FILE):
+                with open(SETTINGS_FILE, 'r') as f:
+                    data = json.load(f)
+                    return data.get(str(chat_id), {})
+        except Exception as e:
+            print(f"Error loading settings: {e}")
+        return {}
+    
+    def save_settings(chat_id, settings):
+        """Fallback JSON-based settings saver"""
+        try:
+            data = {}
+            if os.path.exists(SETTINGS_FILE):
+                with open(SETTINGS_FILE, 'r') as f:
+                    try: data = json.load(f)
+                    except: pass
+            
+            data[str(chat_id)] = settings
+            
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"Error saving settings: {e}")
 
-def save_settings(chat_id, settings):
-    try:
-        data = {}
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r') as f:
-                try: data = json.load(f)
-                except: pass
-        
-        data[str(chat_id)] = settings
-        
-        with open(SETTINGS_FILE, 'w') as f:
-            json.dump(data, f, indent=2)  # Added indent for readability
-    except Exception as e:
-        print(f"Error saving settings: {e}")  
+# save_settings is now imported from database module or defined as fallback above  
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -1628,6 +1638,27 @@ async def wait_for_network():
 
 def main():
     """Main function to start the bot"""
+    # Initialize database (PostgreSQL) if available
+    if USE_DATABASE:
+        log.info("Initializing database...")
+        print("🔄 Initializing PostgreSQL database...")
+        if init_db():
+            log.info("✅ Database ready for use")
+            print("✅ Database initialized and ready")
+            # Get and log stats
+            try:
+                stats = get_stats()
+                log.info(f"📊 Database stats: {stats}")
+                print(f"📊 Database stats: {stats}")
+            except:
+                pass
+        else:
+            log.warning("⚠️ Database initialization failed, using fallback")
+            print("⚠️ Database initialization failed, using fallback")
+    else:
+        log.info("📁 Using JSON file for settings storage")
+        print("📁 Using JSON file for settings storage")
+    
     if "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" in TELEGRAM_BOT_TOKEN:
         log.error("Вкажіть TELEGRAM_BOT_TOKEN!")
         sys.exit(1)
