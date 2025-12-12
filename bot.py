@@ -1490,26 +1490,31 @@ def generate_green_screen_video(original_video_path, ass_path, margin_bottom=30,
 
     ff = find_ffmpeg()
     
-    # ✅ DYNAMIC CROP: Calculate based on actual subtitle settings
-    # Subtitle zone = margin_bottom + subtitle height + top padding
-    # Typical subtitle height ≈ fontsize * 1.5 (for 2-3 lines)
-    # Top padding ≈ fontsize (space above subtitles)
+    # ✅ DYNAMIC CROP: Crop AFTER rendering subtitles on full-size green background
+    # The more margin_bottom, the HIGHER subtitles are = LESS crop needed
+    # Base crop: 45% of height for standard position
+    # Adjust: for each 10px of margin_bottom above 30, ADD ~2% to crop
     
-    estimated_subtitle_height = int(fontsize * 1.5 * 3)  # 3 lines max
-    top_padding = int(fontsize * 2)  # Generous top padding
+    base_crop_percent = 0.45  # Base: 45% for margin_bottom=30
     
-    crop_height = margin_bottom + estimated_subtitle_height + top_padding
-    crop_height = min(crop_height, height)  # Don't exceed video height
-    crop_height = crop_height - (crop_height % 2)  # Even number for x264
+    # If margin_bottom > 30, subtitles higher = need more crop height
+    # If margin_bottom < 30, subtitles lower = can use less crop
+    margin_adjustment = (margin_bottom - 30) / 100.0  # +20 margin = +0.2 = +20%
     
-    # Start crop from this Y position (bottom aligned)
+    crop_percent = base_crop_percent + margin_adjustment
+    crop_percent = max(0.3, min(0.8, crop_percent))  # Clamp between 30-80%
+    
+    crop_height = int(height * crop_percent)
+    crop_height = crop_height - (crop_height % 2)  # Even number
+    
+    # Bottom-aligned crop
     crop_y = height - crop_height
     
-    # Width: FULL WIDTH (no horizontal crop)
+    # Full width
     crop_width = width
     crop_x = 0
     
-    log.info(f"Green screen dynamic crop: {crop_width}x{crop_height} from {width}x{height} (margin:{margin_bottom}px, font:{fontsize}px)")
+    log.info(f"Green screen crop: {crop_width}x{crop_height} ({crop_percent*100:.0f}%) - margin:{margin_bottom}px, font:{fontsize}px")
     
     # Create green background
     # color=c=0x00FF00:s={width}x{height}:d={duration}
@@ -1532,7 +1537,7 @@ def generate_green_screen_video(original_video_path, ass_path, margin_bottom=30,
     dir_name = os.path.dirname(ass_path)
     out_path = os.path.join(dir_name, "chromakey_subtitles.mp4")
     
-    # Combine subtitles and crop in one filter
+    # Crop after rendering subtitles
     combined_filter = f"{vf_filter},crop={crop_width}:{crop_height}:{crop_x}:{crop_y}"
     
     cmd = [
