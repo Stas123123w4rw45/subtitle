@@ -1484,11 +1484,11 @@ def generate_green_screen_video(original_video_path, ass_path):
 
     ff = find_ffmpeg()
     
-    # ✅ SMART OPTIMIZATION: Crop to subtitle zone only
+    # ✅ SMART OPTIMIZATION: Crop to subtitle zone only (HEIGHT only, full WIDTH)
     # Subtitles typically at bottom ~25% of video
-    # Crop: subtitle height + 15% margins on each side
+    # Crop: subtitle height + 15% margin top/bottom
     
-    # Estimate subtitle zone (bottom 30% of video + 15% margin = 45% total)
+    # Subtitle zone: bottom 30% of video + 15% top/bottom margins = 45% total height
     subtitle_zone_percent = 0.45  # 45% of video height
     crop_height = int(height * subtitle_zone_percent)
     crop_height = crop_height - (crop_height % 2)  # Even number for x264
@@ -1496,13 +1496,11 @@ def generate_green_screen_video(original_video_path, ass_path):
     # Start crop from this Y position (bottom aligned)
     crop_y = height - crop_height
     
-    # Width: full width with 15% margin on sides
-    margin_percent = 0.15
-    crop_width = int(width * (1 - 2 * margin_percent))
-    crop_width = crop_width - (crop_width % 2)
-    crop_x = int(width * margin_percent)
+    # Width: FULL WIDTH (no horizontal crop)
+    crop_width = width
+    crop_x = 0
     
-    log.info(f"Green screen crop: {crop_width}x{crop_height} from {width}x{height} (saves {100 * (1 - crop_width*crop_height/(width*height)):.0f}%)")
+    log.info(f"Green screen crop: {crop_width}x{crop_height} from {width}x{height} (saves {100 * (1 - crop_height/height):.0f}%)")
     
     # Create green background
     # color=c=0x00FF00:s={width}x{height}:d={duration}
