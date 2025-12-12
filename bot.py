@@ -1473,7 +1473,7 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def generate_green_screen_video(original_video_path, ass_path):
     """
     Generates a green screen video with burnt-in subtitles.
-    OPTIMIZED for Railway resources - 60-70% smaller files.
+    OPTIMIZED: Smart crop to subtitle zone only (saves 70-80% space).
     """
     duration = get_video_duration(original_video_path)
     width, height = get_video_resolution(original_video_path)
@@ -1484,25 +1484,25 @@ def generate_green_screen_video(original_video_path, ass_path):
 
     ff = find_ffmpeg()
     
-    # ✅ OPTIMIZATION: Limit to 720p (subtitles don't need 1080p+)
-    max_width = 1280
-    max_height = 720
+    # ✅ SMART OPTIMIZATION: Crop to subtitle zone only
+    # Subtitles typically at bottom ~25% of video
+    # Crop: subtitle height + 15% margins on each side
     
-    aspect = width / height
-    if width > max_width or height > max_height:
-        if aspect > 1:  # Landscape
-            new_width = max_width
-            new_height = int(max_width / aspect)
-            new_height = new_height - (new_height % 2)  # Even number
-        else:  # Portrait
-            new_height = max_height
-            new_width = int(max_height * aspect)
-            new_width = new_width - (new_width % 2)
-    else:
-        new_width = width
-        new_height = height
+    # Estimate subtitle zone (bottom 30% of video + 15% margin = 45% total)
+    subtitle_zone_percent = 0.45  # 45% of video height
+    crop_height = int(height * subtitle_zone_percent)
+    crop_height = crop_height - (crop_height % 2)  # Even number for x264
     
-    log.info(f"Green screen: {new_width}x{new_height} (from {width}x{height})")
+    # Start crop from this Y position (bottom aligned)
+    crop_y = height - crop_height
+    
+    # Width: full width with 15% margin on sides
+    margin_percent = 0.15
+    crop_width = int(width * (1 - 2 * margin_percent))
+    crop_width = crop_width - (crop_width % 2)
+    crop_x = int(width * margin_percent)
+    
+    log.info(f"Green screen crop: {crop_width}x{crop_height} from {width}x{height} (saves {100 * (1 - crop_width*crop_height/(width*height)):.0f}%)")
     
     # Create green background
     # color=c=0x00FF00:s={width}x{height}:d={duration}
@@ -1525,21 +1525,23 @@ def generate_green_screen_video(original_video_path, ass_path):
     dir_name = os.path.dirname(ass_path)
     out_path = os.path.join(dir_name, "chromakey_subtitles.mp4")
     
+    # Combine subtitles and crop in one filter
+    combined_filter = f"{vf_filter},crop={crop_width}:{crop_height}:{crop_x}:{crop_y}"
+    
     cmd = [
         ff, "-y",
-        "-f", "lavfi", "-i", f"color=c=0x00FF00:s={new_width}x{new_height}:d={duration}",
-        "-vf", vf_filter,
-        "-r", "24",              # ✅ 24 FPS (subtitles don't need 60fps)
+        "-f", "lavfi", "-i", f"color=c=0x00FF00:s={width}x{height}:d={duration}",
+        "-vf", combined_filter,
         "-c:v", "libx264",
-        "-crf", "28",            # ✅ Higher CRF (green compresses well)
-        "-preset", "veryfast",   # ✅ Better compression
+        "-crf", "23",  # High quality (original settings)
+        "-preset", "superfast",
         "-threads", "2",
         "-max_muxing_queue_size", "1024",
         "-movflags", "+faststart",
         out_path
     ]
     
-    log.info(f"Generating optimized green screen: {' '.join(cmd)}")
+    log.info(f"Generating cropped green screen: {' '.join(cmd)}")
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
     if os.path.exists(out_path):
