@@ -1118,47 +1118,156 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             log.info(f"Відео надіслано: {chat_id}")
 
-            # --- [ВІДПРАВКА ОКРЕМОГО ФАЙЛУ СУБТИТРІВ] ---
-            ass_path = os.path.join(tmp_dir, "subs.ass")
-            if os.path.exists(ass_path):
-                # Формуємо красиву назву для файлу
-                original_filename = os.path.basename(processed_path)
-                # Якщо файл стиснутий, він може мати іншу назву, але це ок.
-                # Візьмемо базу без розширення
-                base_name = os.path.splitext(original_filename)[0]
-                # Прибираємо суфікси типу _subs або _compressed якщо хочемо чистіше, 
-                # але простіше лишити як є, щоб збігалося з відео.
-                
-                ass_filename = f"{base_name}.ass"
-                
-                await context.bot.send_message(chat_id, "📂 Ось ваші субтитри окремим файлом:")
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=open(ass_path, 'rb'),
-                    filename=ass_filename,
-                    caption="Ви можете використати цей файл у відеоредакторі (наприклад, CapCut, Premiere Pro).",
-                    read_timeout=60, 
-                    write_timeout=60, 
-                    connect_timeout=60
-                )
-                log.info(f"Субтитри надіслано: {chat_id}")
-            # ----------------------------------------------
+            # --- [BUTTON FOR SUBTITLES] ---
+            # Don't clean up yet. Offer to download subtitles.
+            keyboard = [
+                [InlineKeyboardButton("📥 Завантажити лише субтитри", callback_data='download_subs')],
+                [InlineKeyboardButton("❌ Завершити", callback_data='cancel_cleanup')]
+            ]
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Якщо потрібні субтитри окремо (для монтажу), натисніть кнопку нижче. 👇",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            # ------------------------------
 
     except Exception as e:
         log.error(f"Помилка (run_processing): {e}", exc_info=True)
         await context.bot.send_message(chat_id=chat_id, text=f"Помилка: {e}")
-    
-    finally:
+        # If error, cleanup now
         video_path = context.user_data.get('video_path')
         if video_path and os.path.exists(video_path):
             os.remove(video_path)
-        
-        if not keep_files_flag:
-            tmp_dir = context.user_data.get('tmp_dir')
-            if tmp_dir and os.path.exists(tmp_dir):
-                shutil.rmtree(tmp_dir)
-            
+        tmp_dir = context.user_data.get('tmp_dir')
+        if tmp_dir and os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir)
         context.user_data.clear()
+
+def generate_green_screen_video(original_video_path, ass_path):
+    """
+    Generates a green screen video with burnt-in subtitles.
+    Resolution and duration match the original video.
+    """
+    duration = get_video_duration(original_video_path)
+    width, height = get_video_resolution(original_video_path)
+    
+    if not width or not height or duration == 0:
+        log.error("Failed to get video props for green screen")
+        return None
+
+    ff = find_ffmpeg()
+    
+    # Create green background
+    # color=c=0x00FF00:s={width}x{height}:d={duration}
+    # Then burn subtitles
+    
+    sub_escaped = escape_for_subtitles_filter(ass_path)
+    fontsdir_path = os.path.abspath("fonts")
+    fontsdir_escaped = escape_for_subtitles_filter(fontsdir_path)
+    
+    vf_filter = ""
+    if os.path.exists(fontsdir_path):
+        vf_filter = f"subtitles='{sub_escaped}':fontsdir='{fontsdir_escaped}'"
+    else:
+        vf_filter = f"subtitles='{sub_escaped}'"
+
+    # Input 0: Green generated video
+    # Since we can't easily pipe generated video into complex filters in one go without -f lavfi
+    # We use -f lavfi -i color=...
+    
+    dir_name = os.path.dirname(ass_path)
+    out_path = os.path.join(dir_name, "chromakey_subtitles.mp4")
+    
+    cmd = [
+        ff, "-y",
+        "-f", "lavfi", "-i", f"color=c=0x00FF00:s={width}x{height}:d={duration}",
+        "-vf", vf_filter,
+        "-c:v", "libx264", "-preset", "superfast", "-pix_fmt", "yuv420p",
+        "-an", # No audio
+        out_path
+    ]
+    
+    log.info(f"Generating Green Screen: {' '.join(cmd)}")
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    if os.path.exists(out_path):
+        return out_path
+    return None
+
+async def handle_download_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    chat_id = query.message.chat_id
+    tmp_dir = context.user_data.get('tmp_dir')
+    video_path = context.user_data.get('video_path') # Original input video
+    
+    if not tmp_dir or not os.path.exists(tmp_dir):
+        await query.edit_message_text("❌ Сесія застаріла. Будь ласка, почніть спочатку.")
+        return ConversationHandler.END
+
+    ass_path = os.path.join(tmp_dir, "subs.ass")
+    
+    if not os.path.exists(ass_path):
+        await query.edit_message_text("❌ Файл субтитрів не знайдено.")
+        return ConversationHandler.END
+
+    await query.edit_message_text("⏳ Генерую субтитри на зеленому фоні...")
+    
+    # Run generation in executor
+    loop = asyncio.get_running_loop()
+    gs_video_path = await loop.run_in_executor(
+        None, 
+        generate_green_screen_video, 
+        video_path, 
+        ass_path
+    )
+    
+    if gs_video_path and os.path.exists(gs_video_path):
+        await context.bot.send_video(
+            chat_id=chat_id,
+            video=open(gs_video_path, 'rb'),
+            width=get_video_resolution(video_path)[0],
+            height=get_video_resolution(video_path)[1],
+            caption="Накладіть субтитри поверх відео у відеоредакторі та виберіть \"Хромакей\". Готово!",
+            read_timeout=120, write_timeout=120, connect_timeout=120
+        )
+    else:
+        await context.bot.send_message(chat_id, "❌ Помилка генерації відео.")
+
+    # Cleanup
+    if video_path and os.path.exists(video_path):
+        try: os.remove(video_path)
+        except: pass
+    if tmp_dir and os.path.exists(tmp_dir):
+        try: shutil.rmtree(tmp_dir)
+        except: pass
+    context.user_data.clear()
+    
+    # await query.edit_message_text("✅ Готово!") # Can't edit after cleanup potentially, or just leave last message
+    return ConversationHandler.END
+
+async def handle_cancel_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    video_path = context.user_data.get('video_path')
+    tmp_dir = context.user_data.get('tmp_dir')
+    
+    if video_path and os.path.exists(video_path):
+        try: os.remove(video_path)
+        except: pass
+    if tmp_dir and os.path.exists(tmp_dir):
+        try: shutil.rmtree(tmp_dir)
+        except: pass
+    context.user_data.clear()
+    
+    await query.edit_message_text("✅ Роботу завершено, файли видалено.")
+    return ConversationHandler.END
+
+# --- Стилі та Меню ---
+
+STYLE_COLORS = {
 
 # --- Стилі та Меню ---
 
@@ -1535,7 +1644,7 @@ def main():
         states={
             STATE_RECEIVE_EDIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit),
-                CallbackQueryHandler(handle_settings_callback, pattern='^(menu_|set_|toggle_|pick_|process_|new_video)')
+                CallbackQueryHandler(handle_settings_callback, pattern="^menu_|^set_|^toggle_|^pick_|^process_|^new_video")
             ],
         },
         fallbacks=[
@@ -1544,6 +1653,9 @@ def main():
         ],
     )
     application.add_handler(conv_handler)
+    application.add_handler(CallbackQueryHandler(handle_download_subs, pattern="^download_subs$"))
+    application.add_handler(CallbackQueryHandler(handle_cancel_cleanup, pattern="^cancel_cleanup$"))
+    application.add_handler(CallbackQueryHandler(handle_new_video_button, pattern="^start_new$"))
 
     # Check for Render environment
     RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
