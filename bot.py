@@ -114,7 +114,7 @@ MAX_LINES_PER_PAGE = 1
 # -------------------------
 
 # --- Стани для діалогу ---
-STATE_RECEIVE_VIDEO, STATE_RECEIVE_EDIT = range(2)
+STATE_RECEIVE_VIDEO, STATE_RECEIVE_EDIT, STATE_BROADCAST = range(3)
 
 # --- Функції-хелпери ---
 
@@ -1037,6 +1037,129 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode='Markdown'
     )
 
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to broadcast message to all users"""
+    chat_id = update.message.chat_id
+    
+    # Check if user is admin
+    if not is_admin(chat_id):
+        await update.message.reply_text("❌ Ця команда доступна тільки адміністратору.")
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "📢 **Розсилка Повідомлення**\n\n"
+        "Надішліть текст повідомлення, яке буде відправлено всім користувачам.\n\n"
+        "Для скасування надішліть /cancel",
+        parse_mode='Markdown'
+    )
+    
+    return STATE_BROADCAST
+
+async def handle_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the broadcast message from admin"""
+    message_text = update.message.text
+    
+    # Get all users from database
+    try:
+        from database import get_all_users
+        all_users = get_all_users()
+    except:
+        all_users = []
+    
+    if not all_users:
+        await update.message.reply_text("❌ Не знайдено користувачів для розсилки.")
+        return ConversationHandler.END
+    
+    # Send confirmation
+    total_users = len(all_users)
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Підтвердити", callback_data="broadcast_confirm"),
+            InlineKeyboardButton("❌ Скасувати", callback_data="broadcast_cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Store message in context
+    context.user_data['broadcast_message'] = message_text
+    context.user_data['broadcast_users'] = all_users
+    
+    await update.message.reply_text(
+        f"📢 **Попередній перегляд:**\n\n"
+        f"{message_text}\n\n"
+        f"👥 **Отримувачів**: {total_users}\n\n"
+        f"Підтвердити розсилку?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    return STATE_BROADCAST
+
+async def handle_broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle broadcast confirmation/cancellation"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data == "broadcast_cancel":
+        await query.edit_message_text("❌ Розсилку скасовано.")
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    if data == "broadcast_confirm":
+        message_text = context.user_data.get('broadcast_message')
+        all_users = context.user_data.get('broadcast_users', [])
+        
+        if not message_text or not all_users:
+            await query.edit_message_text("❌ Помилка: дані розсилки відсутні.")
+            return ConversationHandler.END
+        
+        # Update message to show progress
+        await query.edit_message_text("📤 Розсилка розпочата...\n\n⏳ Відправка повідомлень...")
+        
+        # Send to all users
+        success_count = 0
+        failed_count = 0
+        
+        for user_chat_id in all_users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user_chat_id,
+                    text=message_text,
+                    parse_mode='Markdown'
+                )
+                success_count += 1
+            except Exception as e:
+                log.error(f"Failed to send broadcast to {user_chat_id}: {e}")
+                failed_count += 1
+        
+        # Send report
+        report = (
+            f"✅ **Розсилку завершено!**\n\n"
+            f"📊 **Статистика:**\n"
+            f"  ✅ Успішно: {success_count}\n"
+            f"  ❌ Помилки: {failed_count}\n"
+            f"  📊 Всього: {len(all_users)}"
+        )
+        
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=report,
+            parse_mode='Markdown'
+        )
+        
+        # Log analytics event
+        if USE_ANALYTICS:
+            log_event(query.message.chat_id, 'broadcast_sent', {
+                'total_users': len(all_users),
+                'success': success_count,
+                'failed': failed_count
+            })
+        
+        context.user_data.clear()
+        return ConversationHandler.END
+
 async def handle_new_video_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка кнопки 'Завантажити нове відео'."""
     query = update.callback_query
@@ -1874,6 +1997,19 @@ def main():
     # Admin commands
     application.add_handler(CommandHandler('stats', stats_command))
     application.add_handler(CallbackQueryHandler(handle_stats_callback, pattern="^stats_"))
+    
+    # Broadcast conversation handler (admin only)
+    broadcast_handler = ConversationHandler(
+        entry_points=[CommandHandler('broadcast', broadcast_command)],
+        states={
+            STATE_BROADCAST: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast_message),
+                CallbackQueryHandler(handle_broadcast_callback, pattern="^broadcast_")
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', cancel_command)],
+    )
+    application.add_handler(broadcast_handler)
     
     application.add_handler(MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.AUDIO, handle_audio_transcription))
 
