@@ -2000,7 +2000,7 @@ def main():
     
     # Broadcast conversation handler (admin only)
     broadcast_handler = ConversationHandler(
-        entry_points=[CommandHandler('broadcast', broadcast_command)],
+        entry_points=[CommandHandler('sms', broadcast_command)],
         states={
             STATE_BROADCAST: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast_message),
