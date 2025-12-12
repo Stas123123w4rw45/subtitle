@@ -1470,10 +1470,16 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             shutil.rmtree(tmp_dir)
         context.user_data.clear()
 
-def generate_green_screen_video(original_video_path, ass_path):
+def generate_green_screen_video(original_video_path, ass_path, margin_bottom=30, fontsize=93):
     """
     Generates a green screen video with burnt-in subtitles.
-    OPTIMIZED: Smart crop to subtitle zone only (saves 70-80% space).
+    OPTIMIZED: Smart crop to subtitle zone based on actual margin_bottom and fontsize.
+    
+    Args:
+        original_video_path: Path to source video
+        ass_path: Path to ASS subtitle file
+        margin_bottom: Bottom margin in pixels (from user settings)
+        fontsize: Font size (from user settings)
     """
     duration = get_video_duration(original_video_path)
     width, height = get_video_resolution(original_video_path)
@@ -1484,13 +1490,16 @@ def generate_green_screen_video(original_video_path, ass_path):
 
     ff = find_ffmpeg()
     
-    # ✅ SMART OPTIMIZATION: Crop to subtitle zone only (HEIGHT only, full WIDTH)
-    # Subtitles typically at bottom ~25% of video
-    # Crop: subtitle height + 15% margin top/bottom
+    # ✅ DYNAMIC CROP: Calculate based on actual subtitle settings
+    # Subtitle zone = margin_bottom + subtitle height + top padding
+    # Typical subtitle height ≈ fontsize * 1.5 (for 2-3 lines)
+    # Top padding ≈ fontsize (space above subtitles)
     
-    # Subtitle zone: bottom 30% of video + 15% top/bottom margins = 45% total height
-    subtitle_zone_percent = 0.45  # 45% of video height
-    crop_height = int(height * subtitle_zone_percent)
+    estimated_subtitle_height = int(fontsize * 1.5 * 3)  # 3 lines max
+    top_padding = int(fontsize * 2)  # Generous top padding
+    
+    crop_height = margin_bottom + estimated_subtitle_height + top_padding
+    crop_height = min(crop_height, height)  # Don't exceed video height
     crop_height = crop_height - (crop_height % 2)  # Even number for x264
     
     # Start crop from this Y position (bottom aligned)
@@ -1500,7 +1509,7 @@ def generate_green_screen_video(original_video_path, ass_path):
     crop_width = width
     crop_x = 0
     
-    log.info(f"Green screen crop: {crop_width}x{crop_height} from {width}x{height} (saves {100 * (1 - crop_height/height):.0f}%)")
+    log.info(f"Green screen dynamic crop: {crop_width}x{crop_height} from {width}x{height} (margin:{margin_bottom}px, font:{fontsize}px)")
     
     # Create green background
     # color=c=0x00FF00:s={width}x{height}:d={duration}
@@ -1568,13 +1577,19 @@ async def handle_download_subs(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await query.edit_message_text("⏳ Генерую субтитри на зеленому фоні...")
     
+    # Get user settings for dynamic crop
+    margin_bottom = context.user_data.get('style_margin_bottom', 30)
+    fontsize = context.user_data.get('style_fontsize', 93)
+    
     # Run generation in executor
     loop = asyncio.get_running_loop()
     gs_video_path = await loop.run_in_executor(
         None, 
         generate_green_screen_video, 
         video_path, 
-        ass_path
+        ass_path,
+        margin_bottom,
+        fontsize
     )
     
     if gs_video_path and os.path.exists(gs_video_path):
