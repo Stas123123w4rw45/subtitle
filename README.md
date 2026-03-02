@@ -1,0 +1,77 @@
+---
+title: Subtitle Bot
+emoji: 🎬
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+app_file: app.py
+---
+
+# Subtitle Bot 🎬
+
+Telegram бот для автоматичного додавання субтитрів до відео з підтримкою караоке, анімацій та налаштувань.
+
+## Особливості
+- 🎨 Налаштування шрифтів, кольорів, розмірів
+- 🎤 Караоке режим з кольоровою підсвіткою слів
+- ✨ Анімація активного слова
+- 📐 Розумна розмітка з урахуванням пунктуації
+- 🟨 Вибір кольорів через emoji-кнопки
+
+## Налаштування
+
+### Обов'язкові секрети (Settings → Repository secrets):
+1. `TELEGRAM_BOT_TOKEN` — токен Telegram бота
+2. `GROQ_API_KEY` — API ключ Groq
+
+## 💾 Збереження Налаштувань
+
+Бот **автоматично запам'ятовує** налаштування шрифтів для кожного користувача!
+
+### Що зберігається:
+- 🎨 Шрифт та розмір
+- 🌈 Кольори тексту та підсвітки
+- 📐 Відступи та макет
+- ✨ Налаштування ефектів
+
+### 📖 Документація:
+
+- **[POSTGRESQL_DEPLOY.md](POSTGRESQL_DEPLOY.md)** — ⭐ PostgreSQL Інтеграція (Рекомендовано!)
+- **[SUMMARY_SETTINGS.md](SUMMARY_SETTINGS.md)** — Повний огляд функціоналу
+- **[RAILWAY_QUICK_START.md](RAILWAY_QUICK_START.md)** — Швидке налаштування на Railway (3 хв)
+- **[SETTINGS_INTEGRATION_GUIDE.md](SETTINGS_INTEGRATION_GUIDE.md)** — Детальна інструкція
+- **[ALTERNATIVE_STORAGE.md](ALTERNATIVE_STORAGE.md)** — Інші варіанти збереження
+- **[ARCHITECTURE_DIAGRAM.txt](ARCHITECTURE_DIAGRAM.txt)** — Візуальна схема роботи
+
+### 🗄️ Збереження Даних:
+
+**PostgreSQL (Рекомендовано) ⭐**:
+- ✅ Автоматична персистентність
+- ✅ Швидкість та надійність
+- ✅ Автобекапи на Railway
+- ✅ Підтримка необмеженої кількості користувачів
+
+**Зараз використовується**: PostgreSQL база даних на Railway
+
+📖 **Інструкція з інтеграції**: [POSTGRESQL_DEPLOY.md](POSTGRESQL_DEPLOY.md)
+
+### 🧪 Тестування:
+
+**PostgreSQL база даних:**
+```bash
+# Встановіть DATABASE_URL від Railway
+pip install psycopg2-binary
+python test_database.py
+```
+
+**Локальне збереження (fallback):**
+```bash
+python test_settings.py
+```
+
+## Використання
+1. Надішліть відео боту
+2. Отримайте автоматичну розшифровку
+3. Налаштуйте стиль субтитрів (зберігається автоматично!)
+4. Отримайте відео з субтитрами!
